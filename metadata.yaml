@@ -1,0 +1,64 @@
+short-description: 千川视频输入沙箱样本，CV功能待下一阶段加入
+tags:
+- 千川
+- 沙箱测试
+requires:
+  env:
+  - ENV_BACKEND_HOST
+  - YUCE_AUTHORIZATION
+pre_input: '请执行千川视频输入样本A阶段。
+
+  千川授权店铺：__field:api_shop__
+
+  千川广告主ID：__field:rpa_shop__
+
+  时间范围：__field:date_range__
+
+  详情素材数：__field:top_n__
+
+  筛选与排序条件：__field:material_filter_sort__
+
+  仅获取1条视频，完成CSV与媒体校验并交付技术报告。'
+skill_form:
+- key: api_shop
+  type: api_shop
+  label: 千川授权店铺
+  description: 从千川 API 已授权店铺中选择；只用于第一步素材报表查询
+  application_id: OCEANENGINE
+  multiple: false
+  required: true
+- key: rpa_shop
+  type: rpa_shop
+  label: 千川广告主ID
+  description: 选择 account 为千川广告主 ID 的 RPA 授权账号；执行前核对该 ID 属于所选 API 店铺，授权项 ID 仅用于逐素材诊断
+  application_id: RPA_JULIANG_QC
+  value_format: both
+  multiple: false
+  required: true
+- key: date_range
+  type: daterange
+  label: 时间范围
+  description: 结束日期最晚为执行日前2天；执行前由脚本校验
+  placeholder: 开始日期,结束日期
+  format: YYYY-MM-DD
+  value_format: YYYY-MM-DD
+  max_policy: t_plus_2
+  required: true
+- key: top_n
+  type: number
+  label: 详情素材数
+  description: 当前样本只获取一条视频，用于后续沙箱CV测试的输入验证
+  required: true
+  default: 1
+  min: 1
+  step: 1
+  precision: 0
+  addon_after: 条
+  max: 1
+- key: material_filter_sort
+  type: textarea
+  label: 筛选与排序条件
+  description: 可选；用自然语言描述指标阈值、排序字段和方向；不填写则不加筛选，默认按整体消耗降序排列
+  placeholder: 例如：整体消耗 >= 10000，再按净成交 ROI 降序
+  required: false
+  rows: 3

@@ -1,0 +1,76 @@
+{
+  "sourceRepository": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill",
+  "sourceHead": "b5a5f023f20be5255f9d426db74d47469e70bb7a",
+  "reason": "用户要求照搬元技能取数设计，复制所需契约/解析/选材实现，样本运行时完全独立",
+  "files": [
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/config_specs.py",
+      "destination": "scripts/config_specs.py",
+      "sourceSha256": "4af5e29406b8c4e94fe09e2c327a8cdd2fd5346d843f72913101ebdcd0c3f07d",
+      "localSha256": "4af5e29406b8c4e94fe09e2c327a8cdd2fd5346d843f72913101ebdcd0c3f07d"
+    },
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/highlight_policy.py",
+      "destination": "scripts/highlight_policy.py",
+      "sourceSha256": "64c19dfe11f6adde787f9fc8d5f2ea650d666fcfd111c00e1acbd98e87bdeb85",
+      "localSha256": "64c19dfe11f6adde787f9fc8d5f2ea650d666fcfd111c00e1acbd98e87bdeb85"
+    },
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/material_query.py",
+      "destination": "scripts/material_query.py",
+      "sourceSha256": "84a6512e8856c2ff72081c3bb462f38a1be00a58f15f2ee15348ca2be561c01b",
+      "localSha256": "84a6512e8856c2ff72081c3bb462f38a1be00a58f15f2ee15348ca2be561c01b"
+    },
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/field_registry.py",
+      "destination": "scripts/field_registry.py",
+      "sourceSha256": "648c3bab8862387031c68a4ff255550f7a7c7c69f8a8228c6b01020fa5037f65",
+      "localSha256": "648c3bab8862387031c68a4ff255550f7a7c7c69f8a8228c6b01020fa5037f65"
+    },
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/date_policy.py",
+      "destination": "scripts/date_policy.py",
+      "sourceSha256": "d2ccb1a3f70e6efd140fb404901ce1cc04f8f8bde0ccc45694f3a01ee05a8300",
+      "localSha256": "d2ccb1a3f70e6efd140fb404901ce1cc04f8f8bde0ccc45694f3a01ee05a8300"
+    },
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/qianchuan_report_client.py",
+      "destination": "scripts/qianchuan_report_client.py",
+      "sourceSha256": "cb5f305cca4e4a66b03a5780ab66d2a07c77666fbf01000e52141c6740329379",
+      "localSha256": "0e93bbac77940ccc9608fe4df16bbf3bb3b672b6f3ae9ef90f063d4a49eee796",
+      "localChange": "下载报表CSV改用本包32MiB有界下载；不沿用网关会话向CDN发送Cookie；API字段与报表调用保持来源契约"
+    },
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/rpa_csv_parser.py",
+      "destination": "scripts/rpa_csv_parser.py",
+      "sourceSha256": "3da8d17b4b47eba4f0731fd291ae1a6b51be8ccf1e5c9f1324d3805259d6fe79",
+      "localSha256": "3da8d17b4b47eba4f0731fd291ae1a6b51be8ccf1e5c9f1324d3805259d6fe79"
+    },
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/config/asset-field-registry-v1.json",
+      "destination": "config/asset-field-registry-v1.json",
+      "sourceSha256": "35980eed67fc97bd6386f0942d9a030b696abaf245d5bf8c17fae73c80acf253",
+      "localSha256": "35980eed67fc97bd6386f0942d9a030b696abaf245d5bf8c17fae73c80acf253"
+    },
+    {
+      "source": "/Users/shuzida/Desktop/skill统一管理/repositories/yuntu-meta-skill/scripts/rpa_dynamic_client.py",
+      "destination": "scripts/connector_contract.py",
+      "extractedDefinitions": [
+        "ContractError",
+        "ValidationContractError",
+        "_format_json_path",
+        "_type_matches",
+        "parse_schema_text",
+        "resolve_platform",
+        "validate_business_params",
+        "validate_list_params",
+        "validate_schema_params"
+      ],
+      "sourceSha256": "cbb93fb38597808fecb52956dee58c2d4f48a2d596594585579f5e6d446edb05",
+      "localSha256": "b03f003ae09cbaf250a8282d81dafbd4678711628e17c053586b2dd865ab31ce",
+      "sourceHead": "8e2c0d0f418196c0f49e79164a7da733f69f1427",
+      "localChange": "仅抽取参数校验定义，排除原网络/CLI入口"
+    }
+  ],
+  "maintenance": "本仓独立维护；源仓后续变化须重新审视后显式迁移，不运行时跨仓导入"
+}

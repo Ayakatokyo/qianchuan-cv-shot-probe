@@ -1,0 +1,20 @@
+{
+  "api_shop": "所选API店铺extra.shop_id",
+  "rpa_shop": "所选RPA账号extra.shop_id",
+  "query_spec": {
+    "schemaVersion": 1,
+    "source": "qianchuan_direct_material_report",
+    "scope": {},
+    "period": {
+      "startDate": "2026-09-20",
+      "endDate": "2026-09-21"
+    },
+    "filters": {
+      "dimensionFilters": [],
+      "metricFilters": []
+    },
+    "collection": {
+      "targetTopN": 1
+    }
+  }
+}

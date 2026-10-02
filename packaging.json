@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "package": "qianchuan-cv-shot-probe",
+  "rootLayout": "flat",
+  "files": [
+    {
+      "source": "SKILL.md",
+      "destination": "SKILL.md"
+    },
+    {
+      "source": "metadata.yaml",
+      "destination": "metadata.yaml"
+    },
+    {
+      "source": "requirements.txt",
+      "destination": "requirements.txt"
+    },
+    {
+      "source": "references/input-contract.md",
+      "destination": "references/input-contract.md"
+    },
+    {
+      "source": "scripts/config_specs.py",
+      "destination": "scripts/config_specs.py"
+    },
+    {
+      "source": "scripts/connector_contract.py",
+      "destination": "scripts/connector_contract.py"
+    },
+    {
+      "source": "scripts/date_policy.py",
+      "destination": "scripts/date_policy.py"
+    },
+    {
+      "source": "scripts/field_registry.py",
+      "destination": "scripts/field_registry.py"
+    },
+    {
+      "source": "scripts/highlight_policy.py",
+      "destination": "scripts/highlight_policy.py"
+    },
+    {
+      "source": "scripts/material_query.py",
+      "destination": "scripts/material_query.py"
+    },
+    {
+      "source": "scripts/platform_adapter.py",
+      "destination": "scripts/platform_adapter.py"
+    },
+    {
+      "source": "scripts/probe_core.py",
+      "destination": "scripts/probe_core.py"
+    },
+    {
+      "source": "scripts/qianchuan_report_client.py",
+      "destination": "scripts/qianchuan_report_client.py"
+    },
+    {
+      "source": "scripts/rpa_csv_parser.py",
+      "destination": "scripts/rpa_csv_parser.py"
+    },
+    {
+      "source": "scripts/run.py",
+      "destination": "scripts/run.py"
+    },
+    {
+      "source": "config/asset-field-registry-v1.json",
+      "destination": "config/asset-field-registry-v1.json"
+    },
+    {
+      "source": "config/platform.json",
+      "destination": "config/platform.json"
+    },
+    {
+      "source": "config/request-example.json",
+      "destination": "config/request-example.json"
+    },
+    {
+      "source": "scripts/delivery.py",
+      "destination": "scripts/delivery.py"
+    }
+  ]
+}
