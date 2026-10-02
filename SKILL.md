@@ -1,13 +1,13 @@
 ---
 name: qianchuan-cv-shot-probe
-description: 用于千川视频CV沙箱样本的A阶段输入测试；通过授权取数、RPA CSV和来源校验下载一条视频，生成技术报告。当前版本不运行CV、ASR或模型分析。
+description: 用于千川单视频CV沙箱测试；授权取数、RPA CSV校验后下载视频，复用本地视频执行低内存镜头切分、代表帧和资源报告。无ASR或模型分析。
 metadata:
-  argument_hint: 使用平台授权表单，获取1条视频并验证沙箱输入链路。
+  argument_hint: 使用平台授权表单，获取1条视频并测试低内存CV分镜。
 ---
 
-# 千川视频输入沙箱样本（A阶段）
+# 千川视频CV分镜沙箱测试（A+B阶段）
 
-当前已实现输入测试；CV切分、音频转写、脚本拆解和宿主二次分析未加入。只获取一条视频，不补位，不自动重提任务，不加载ASR/OCR/CV或看图模型。
+当前实现A视频输入与B低内存CV分镜。只获取一条视频，不补位、不自动重提任务。B复用A已校验视频；音频转写、脚本拆解、宿主二次分析后置。
 
 ## 输入准备
 
@@ -46,4 +46,23 @@ python "$SKILL_ROOT/scripts/run.py" export-report --run-dir "$RUN_ROOT" --output
 python "$SKILL_ROOT/scripts/run.py" verify-export --bundle-dir "$WORKSPACE_ROOT/交付/样本报告-唯一标识"
 ```
 
-export-report只选入报告、源视频（有合法下载收据时）、资源采样及bundle-manifest，不包含原CSV、账号、请求或签名URL。交付生成的ZIP文件及其SHA；不能只用报告归档器导出report子目录后称为含源视频。以实际下载ZIP文件清单为准，至少检查manifest、report、media和resources；缺项说明交付不完整。失败态报告保留已完成的素材与实测媒体，但不生成成功收据。时长按元数据精度核对：整数秒允许1秒差，小数秒默认0.1秒，宽高/FPS仍严格；比较值/容差写入报告。
+export-report只选入报告、源视频（有合法下载收据时）、A/B资源、CV状态/收据/依赖/诊断/配置/镜头/全部代表帧及bundle-manifest，不包含原CSV、账号、请求或签名URL。交付生成的ZIP文件及其SHA；不能只用报告归档器导出report子目录后称为含源视频。以实际下载ZIP文件清单为准，至少检查manifest、report、media和resources；缺项说明交付不完整。失败态报告保留已完成的素材与实测媒体，但不生成成功收据。时长按元数据精度核对：整数秒允许1秒差，小数秒默认0.1秒，宽高/FPS仍严格；比较值/容差写入报告。
+
+## B阶段：复用视频测试CV
+
+A的video_ready和成功收据通过后执行。已有运行目录含原视频/CSV即可复用；只有report的历史ZIP不能当B输入，不能因为缺视频自动重提RPA。CV依赖安装到执行A的同一Python环境：
+
+```bash
+uv pip install --python <当前python路径> --only-binary=:all: -r "$SKILL_ROOT/requirements-cv.txt"
+python "$SKILL_ROOT/scripts/run.py" preflight --cv
+python "$SKILL_ROOT/scripts/run.py" probe-cv --run-dir "$RUN_ROOT" --profile low-memory
+python "$SKILL_ROOT/scripts/run.py" verify-cv --run-dir "$RUN_ROOT"
+python "$SKILL_ROOT/scripts/run.py" export-report --run-dir "$RUN_ROOT" --output-dir "$WORKSPACE_ROOT/交付/CV样本报告-唯一标识"
+python "$SKILL_ROOT/scripts/run.py" verify-export --bundle-dir "$WORKSPACE_ROOT/交付/CV样本报告-唯一标识"
+```
+
+宿主没有uv时使用既有依赖工具，同环境binary-only安装；不能改装模型或偷偷切到其他环境。preflight只核对版本，真实import也在监测worker内。probe-cv默认300秒，外层执行超时留至少360秒，逐步监测；B失败先status/render-report并交付诊断，停止后续分析，不把A成功当成CV成功。
+
+低内存配置最大边320、单线程、保留原PTS、有界帧队列；每镜头都有代表帧，上限300，超限失败。cgroup可读时80%阈值阻断/中止；额度或进程树未知明示，SIGKILL不自动标OOM。具体参数、资源限制和产物见[CV契约](references/cv-contract.md)。结果是算法候选边界，需人工核对真实镜头质量。
+
+用户要求稳定性测试时，以同一视频/配置显式执行 --attempt-id repeat-1、repeat-2、repeat-3；各次保持独立收据和资源，不重取数。普通重复命令复用已校验成功B，不能把缓存复用算成三次测试。每平台必须返回实际含视频/代表帧/资源的完整ZIP；安装成功、本地通过都不能替代目标沙箱验收。本阶段不调用宿主Agent分析。

@@ -135,7 +135,7 @@ class AcquisitionTests(unittest.TestCase):
     def test_full_real_http_acquisition_and_tamper_gate(self):
         root=Path(self.root_temp.name)/'run'
         result=core.acquire(request(),root)
-        self.assertEqual(result['status'],'video_ready');self.assertEqual(result['cvStatus'],'not_implemented')
+        self.assertEqual(result['status'],'video_ready');self.assertEqual(result['cvStatus'],'not_run')
         receipt=core.verify(root);self.assertGreater(receipt['media']['durationSec'],0)
         paths=[a['path'] for a in receipt['artifacts']];self.assertEqual(len(paths),len(set(paths)))
         self.assertEqual(self.state['submits'],1 if PLATFORM=='qianchuan' else 2)

@@ -16,6 +16,10 @@ def verify_export(root):
     if not required<=paths:raise ProbeError('delivery_incomplete')
     public=read(root/'report/report.json')
     if public.get('videoPath') and 'media/source-video.mp4' not in paths:raise ProbeError('delivery_video_missing')
+    cv=public.get('cv',{})
+    if cv.get('status')=='succeeded':
+        prefix='cv/'+cv['attemptId']+'/'
+        if prefix+'shots.json' not in paths or any(prefix+s['frameRef'] not in paths for s in cv['shots']):raise ProbeError('delivery_cv_missing')
     for item in manifest['artifacts']:
         path=safe_file(root,item['path'])
         if artifact(path,root)!=item:raise ProbeError('delivery_artifact_changed')
@@ -47,6 +51,13 @@ def export_report(root,destination):
                 src=safe_file(root,relative)
                 if artifact(src,root)!=public['videoArtifact']:raise ProbeError('artifact_changed')
                 shutil.copy2(src,target)
+            cv=public.get('cv',{})
+            if cv.get('attemptId'):
+                prefix='cv/'+cv['attemptId']+'/'
+                selected=['config.json','resources.ndjson','shots.json','status.json','receipt.json','worker-environment.json','boundaries.ndjson','supervisor-failure.json','worker-failure.json']+[s['frameRef'] for s in cv.get('shots',[]) if s['representativeStatus']=='available']
+                for relative in selected:
+                    if (root/prefix/relative).exists():
+                        src=safe_file(root,prefix+relative);target=scratch/prefix/relative;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,target)
             artifacts=[artifact(p,scratch) for p in sorted(scratch.rglob('*')) if p.is_file()]
             write(scratch/'bundle-manifest.json',{'schemaVersion':1,'status':public['status'],'containsPrivateSources':False,'artifacts':artifacts})
             verify_export(scratch)

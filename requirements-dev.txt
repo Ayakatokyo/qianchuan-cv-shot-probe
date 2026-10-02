@@ -1,2 +1,2 @@
--r requirements.txt
+-r requirements-cv.txt
 PyYAML>=6,<7

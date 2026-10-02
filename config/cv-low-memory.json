@@ -1,0 +1,11 @@
+{
+  "profile": "low-memory",
+  "maxDimension": 320,
+  "maxShots": 300,
+  "timeoutSec": 300,
+  "memoryGuardFraction": 0.8,
+  "minShotSec": 0.2,
+  "adaptiveThreshold": 3.0,
+  "windowWidth": 2,
+  "minContentVal": 15.0
+}

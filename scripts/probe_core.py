@@ -282,7 +282,7 @@ def probe_media(path):
         if not videos:raise ProbeError('video_stream_missing')
         v=videos[0]; rate=v.get('avg_frame_rate','0/1').split('/');fps=float(rate[0])/float(rate[1])
         duration=float(raw.get('format',{}).get('duration') or v.get('duration') or 0)
-        info={'durationSec':duration,'width':int(v['width']),'height':int(v['height']),'fps':fps,'codec':v['codec_name'],'probeProvider':'ffprobe'}
+        info={'durationSec':duration,'width':int(v['width']),'height':int(v['height']),'fps':fps,'codec':v['codec_name'],'probeProvider':'ffprobe','videoDurationSec':float(v['duration']) if v.get('duration') not in (None,'N/A') else None,'videoStartSec':v.get('start_time'),'videoTimeBase':v.get('time_base')}
     else:
         executable=imageio_ffmpeg.get_ffmpeg_exe()
         p=subprocess.run([executable,'-hide_banner','-i',str(path)],capture_output=True,text=True,timeout=30)
@@ -379,14 +379,27 @@ def report(root):
     public['runtime']=read(root/'environment.json') if (root/'environment.json').exists() else None
     tasks=read(root/'acquisition/tasks.json') if (root/'acquisition/tasks.json').exists() else {}
     public['tasks']=[{'phase':phase,**{k:task.get(k) for k in ('connectorCode','taskId','status')}} for phase,task in tasks.items()]
+    from cv_probe import cv_status,verify_cv
+    cv=cv_status(root);public['acquisitionStatus']=state['status'];public['cvStatus']=cv['status'];public['cv']=cv
+    if cv['status']!='not_run':
+        public['stage']='B_cv';public['status']=cv['status'];public['errorCode']=cv.get('errorCode')
+        if cv['status']=='succeeded':verify_cv(root)
     target=root/'report';target.mkdir(exist_ok=True)
     write(target/'report.json',public)
-    content='<html lang="zh-CN"><meta charset="utf-8"><title>视频输入样本测试</title><body><h1>视频输入样本测试</h1><p>当前为 A 阶段；CV 尚未加入。</p><pre>'+html.escape(json.dumps(public,ensure_ascii=False,indent=2))+'</pre>'
+    display={**public,'cv':{k:v for k,v in cv.items() if k!='shots'}}
+    content='<html lang="zh-CN"><meta charset="utf-8"><title>视频与CV沙箱测试</title><style>body{font-family:system-ui;max-width:1100px;margin:24px auto;padding:16px}pre{white-space:pre-wrap;word-break:break-word;background:#f5f5f5;padding:16px}td,th{padding:8px;border-bottom:1px solid #ddd;text-align:left}img{max-width:120px}button{cursor:pointer}</style><body><h1>视频与CV沙箱测试</h1><p>阶段：'+html.escape(public['stage'])+'；CV状态：'+html.escape(cv['status'])+'。资源可运行性与人工切分质量分别验收。</p><pre>'+html.escape(json.dumps(display,ensure_ascii=False,indent=2))+'</pre>'
     if video_ref:content+='<video controls style="max-width:360px" src="../media/source-video.mp4"></video>'
+    if cv.get('shots'):
+        content+='<h2>镜头与代表帧</h2><table><thead><tr><th>镜头</th><th>时间区间（秒）</th><th>代表帧</th><th>状态</th></tr></thead><tbody>'
+        for shot in cv['shots']:
+            frame='../cv/'+cv['attemptId']+'/'+shot['frameRef']
+            image='<img loading="lazy" src="'+html.escape(frame,quote=True)+'">' if shot['representativeStatus']=='available' else '代表帧缺失'
+            content+='<tr><td>'+html.escape(shot['shotId'])+'</td><td><button data-start="'+str(shot['startSec'])+'">'+f"{shot['startSec']:.3f}–{shot['endSec']:.3f}"+'</button></td><td>'+image+'</td><td>'+html.escape(shot['representativeStatus'])+'</td></tr>'
+        content+='</tbody></table><script>document.querySelectorAll("button[data-start]").forEach(b=>b.onclick=()=>{const v=document.querySelector("video");if(v){v.currentTime=Number(b.dataset.start);v.play();}});</script>'
     content+='</body></html>'
     (target/'index.html').write_text(content,encoding='utf-8')
     write(target/'receipt.json',{'artifacts':[artifact(target/'index.html',root),artifact(target/'report.json',root)]})
-    return {'status':state['status'],'reportPath':str(target/'index.html'),'cvStatus':'not_implemented'}
+    return {'status':public['status'],'reportPath':str(target/'index.html'),'cvStatus':cv['status']}
 
 def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,media_probe=probe_media):
     adapter=adapter or __import__('platform_adapter')
@@ -405,7 +418,7 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
             if state.get('firstBatchCsvGate',{}).get('status')=='blocked':raise ProbeError('rpa_paused')
         else:
             write(root/'request.json',normalized)
-            write(root/'environment.json',{'python':sys.version,'platform':sys.platform,'dependencies':dependency_versions(),'stage':'A','cgroup':cgroup_snapshot(),'runtimeFilesSha256':fingerprint({p.name:digest(p) for p in (ROOT/'scripts').glob('*.py')})})
+            write(root/'environment.json',{'python':sys.version,'platform':sys.platform,'dependencies':dependency_versions(),'stage':'A','packageVersion':read(ROOT/'config/platform.json').get('version'),'cgroup':cgroup_snapshot(),'runtimeFilesSha256':fingerprint({p.name:digest(p) for p in (ROOT/'scripts').glob('*.py')})})
         transition(root,'starting',errorCode=None)
         with Resources(root) as resources:
             try:
@@ -470,9 +483,11 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
 
 def main(argv=None):
     import argparse
-    parser=argparse.ArgumentParser(description='A阶段：一条平台视频输入；不运行CV/ASR/模型')
+    parser=argparse.ArgumentParser(description='A获取一条视频，B离线CV切分与资源测试；无ASR/模型调用')
     commands=parser.add_subparsers(dest='command',required=True)
-    commands.add_parser('preflight')
+    commands.add_parser('preflight').add_argument('--cv',action='store_true')
+    p=commands.add_parser('probe-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--profile',choices=['low-memory'],default='low-memory');p.add_argument('--attempt-id');p.add_argument('--config-file',type=Path)
+    p=commands.add_parser('verify-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--attempt-id')
     p=commands.add_parser('export-report');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
     p=commands.add_parser('verify-export');p.add_argument('--bundle-dir',type=Path,required=True)
     for name in ('validate','acquire','resume'):
@@ -484,7 +499,17 @@ def main(argv=None):
     try:
         if args.command=='preflight':
             result=preflight()
+            if args.cv:
+                from cv_probe import dependency_status
+                result['cv']=dependency_status()
+                if result['cv']['status']!='ready':result['status']='dependency_missing'
             print(json.dumps(result,ensure_ascii=False));return 0 if result['status']=='ready' else 2
+        elif args.command=='probe-cv':
+            from cv_probe import probe_cv
+            result=probe_cv(external_root(args.run_dir),attempt_id=args.attempt_id,config_file=args.config_file)
+        elif args.command=='verify-cv':
+            from cv_probe import verify_cv
+            receipt=verify_cv(external_root(args.run_dir),args.attempt_id);result={'status':'verified','cvStatus':receipt['status']}
         elif args.command=='export-report':
             from delivery import export_report
             result=export_report(external_root(args.run_dir),external_root(args.output_dir))
@@ -499,10 +524,12 @@ def main(argv=None):
             root=external_root(args.run_dir)
             if args.command=='status':
                 state=read(root/'status.json');result={k:state.get(k) for k in ('status','stage','pid','updatedAt','errorCode','firstBatchCsvGate')}
-                result['nextAction']='verify' if state['status']=='video_ready' else 'inspect_saved_tasks_no_resubmit'
+                from cv_probe import cv_status
+                cv=cv_status(root);result['cv']={k:cv.get(k) for k in ('status','attemptId','stage','errorCode','failureStage','shotCount')}
+                result['nextAction']='export-report' if cv['status']=='succeeded' else ('probe-cv' if state['status']=='video_ready' and cv['status']=='not_run' else 'inspect_saved_state_no_automatic_retry')
             elif args.command=='verify':
-                receipt=verify(root);result={'status':'verified','materialId':receipt['materialId'],'cvStatus':'not_implemented'}
+                receipt=verify(root);result={'status':'verified','materialId':receipt['materialId'],'stage':'A_acquisition'}
             else:result=report(root)
-        print(json.dumps(result,ensure_ascii=False));return 0
+        print(json.dumps(result,ensure_ascii=False));return 1 if result.get('status') in ('failed','interrupted') else 0
     except Exception as exc:
         print(json.dumps({'status':'failed','errorCode':getattr(exc,'code','input_or_contract_error'),'message':safe_error(exc)},ensure_ascii=False));return 1

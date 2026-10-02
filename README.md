@@ -1,15 +1,13 @@
-# 千川视频输入沙箱样本
+# 千川视频CV分镜沙箱样本
 
-稳定ID `qianchuan-cv-shot-probe`，A修复版0.1.1；用户提供的目标沙箱A日志显示两平台已取到视频，云图曾误判时长并在现场获授权修正恢复。本仓修复回归通过，修复包尚未在沙箱复测。业务入口和范围见[SKILL.md](SKILL.md)。
+稳定ID `qianchuan-cv-shot-probe`，当前0.2.0（A+B）。A修复已先提交并推送后才开发B；A门禁、整数时长容差、失败信息与完整导出保留。B复用视频执行受监督的低内存CV镜头检测、逐镜头代表帧和技术报告。业务入口见[SKILL.md](SKILL.md)，参数及限制见[CV契约](references/cv-contract.md)。
 
-- 环境：Python 3.11+（本机使用3.13验证），按requirements.txt安装；无ASR/OCR/CV模型依赖。
-- 入口：python3 scripts/run.py --help；preflight检查依赖；export-report/verify-export生成并核对含视频/资源的独立交付ZIP。
-- 本地回归：python3.13 -B tools/test.py。
-- 独立构建：python3.13 -B tools/build.py；正式清单见packaging.json。
-- 迁移来源与快照见migration/source-manifest.json；本仓维护独立副本，运行时不引用兄弟仓。
-- 输出到源码/安装目录之外的新路径；客户原件、环境、凭证不提交、不入包。
-- A阶段input/CSV/MP4通过后，再实现probe-cv并在目标沙箱分别测试，不能跳过此门槛。
+- 依赖：Python3.12当前验证环境；同环境binary-only安装requirements-dev.txt用于开发，requirements-cv.txt用于沙箱A+B。CV固定版本，无ASR/OCR/模型。
+- 入口：python scripts/run.py preflight --cv；probe-cv复用A运行目录，verify-cv检查收据；export-report/verify-export交付完整报告ZIP。
+- 验证：python -B tools/test.py（33项，包括实际合成视频硬切、单镜头、VFR、损坏解码、代表帧失败、超时/SIGKILL/内存门禁及资源篡改）。合成案例不代表真实视频镜头质量或1GiB内存验收。
+- 构建：python -B tools/build.py；packaging.json显式运行文件清单；开发工具/测试/CI不入运行包。
+- 迁移来源见migration/source-manifest.json；本仓独立副本，运行时不引用兄弟仓。
+- 原始客户附件留Downloads，运行目录、媒体、环境、凭证均在仓外，不进入Git。
+- 当前B包的生意高手安装/import/真实视频重复运行仍待验；不包含脚本语义对齐、Agent转写或宿主二次分析。
 
-统一进度在[项目管理](../../项目管理/docs/AI短视频Skill开发批次进度.md)，设计在[双样本设计](../../项目管理/docs/规划/2026-10-03-千川云图CV分镜沙箱样本技能设计.md)。
-
-A修复：整数秒时长容差、失败报告信息保留、收据去重、依赖预检、自包含交付与恢复活跃采样时长。源码/干净包各20项回归，原始客户附件留在Downloads，不进入Git。
+[唯一当前进度](../../项目管理/docs/AI短视频Skill开发批次进度.md) / [样本设计](../../项目管理/docs/规划/2026-10-03-千川云图CV分镜沙箱样本技能设计.md)。

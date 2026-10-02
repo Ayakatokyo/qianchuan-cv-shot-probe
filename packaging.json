@@ -78,6 +78,26 @@
     {
       "source": "scripts/delivery.py",
       "destination": "scripts/delivery.py"
+    },
+    {
+      "source": "requirements-cv.txt",
+      "destination": "requirements-cv.txt"
+    },
+    {
+      "source": "config/cv-low-memory.json",
+      "destination": "config/cv-low-memory.json"
+    },
+    {
+      "source": "scripts/cv_probe.py",
+      "destination": "scripts/cv_probe.py"
+    },
+    {
+      "source": "scripts/cv_worker.py",
+      "destination": "scripts/cv_worker.py"
+    },
+    {
+      "source": "references/cv-contract.md",
+      "destination": "references/cv-contract.md"
     }
   ]
 }

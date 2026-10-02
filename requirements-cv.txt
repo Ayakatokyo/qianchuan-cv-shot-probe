@@ -1,0 +1,4 @@
+-r requirements.txt
+numpy==2.2.6
+opencv-python-headless==4.11.0.86
+scenedetect==0.6.7.1
