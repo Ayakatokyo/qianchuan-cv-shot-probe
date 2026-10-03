@@ -74,7 +74,7 @@ class CvTests(unittest.TestCase):
         self.assertFalse(cv.recorded_process_alive(state))
         self.assertEqual(core.verify(self.root)['status'],'video_ready')
     def test_shared_cgroup_low_headroom_blocks_before_worker(self):
-        self.acquire();snapshot={'status':'available','version':1,'memory.usage_in_bytes':'90','memory.limit_in_bytes':'100','memory.failcnt':'1000'}
+        self.acquire();snapshot={'status':'available','version':1,'memory.usage_in_bytes':str(900*1048576),'memory.limit_in_bytes':str(1024*1048576),'memory.failcnt':'1000'}
         with patch.object(cv,'cgroup_snapshot',return_value=snapshot):result=cv.probe_cv(self.root,attempt_id='guard')
         self.assertEqual(result['status'],'failed');receipt=core.read(self.root/'cv/guard/receipt.json')
         self.assertEqual(receipt['errorCode'],'insufficient_headroom');self.assertIsNone(receipt['workerExitCode'])
@@ -108,8 +108,8 @@ class CvTests(unittest.TestCase):
         self.assertFalse((self.root/'cv/killed/shots.json').exists())
     def test_memory_guard_aborts_its_running_worker(self):
         self.acquire()
-        low={'status':'available','version':1,'memory.usage_in_bytes':'10','memory.limit_in_bytes':'100'}
-        high={**low,'memory.usage_in_bytes':'90'}
+        low={'status':'available','version':1,'memory.usage_in_bytes':str(100*1048576),'memory.limit_in_bytes':str(1024*1048576)}
+        high={**low,'memory.usage_in_bytes':str(900*1048576)}
         calls=[]
         def snapshot():calls.append(1);return low if len(calls)==1 else high
         with patch.object(cv,'cgroup_snapshot',side_effect=snapshot):result=cv.probe_cv(self.root,attempt_id='runtime-guard')
@@ -139,3 +139,25 @@ class CvTests(unittest.TestCase):
         with self.assertRaises(core.ProbeError):cv.config_value(self.config(maxDimension=1920))
         self.assertIsNone(cv.memory_usage({'status':'unavailable'}))
         self.assertIsNone(cv.memory_usage({'status':'available','version':2,'memory.current':'42','memory.max':'max'}))
+
+    def test_adaptive_backend_remains_explicit_and_does_not_reuse_native(self):
+        self.acquire(self.multi)
+        self.assertEqual(cv.probe_cv(self.root,attempt_id='native')['status'],'succeeded')
+        result=cv.probe_cv(self.root,backend='adaptive',attempt_id='adaptive')
+        self.assertEqual(result['status'],'succeeded')
+        data=core.read(self.root/'cv/adaptive/shots.json');self.assertEqual(len(data['shots']),16)
+        self.assertEqual(data['detector'],'AdaptiveDetector')
+    def test_native_run_with_cache_heavy_logged_baseline_and_guard_evidence(self):
+        self.acquire(self.multi)
+        from test_memory_guard import snapshot
+        observed=snapshot()
+        with patch.object(cv,'cgroup_snapshot',return_value=observed):result=cv.probe_cv(self.root,attempt_id='cached-native')
+        self.assertEqual(result['status'],'succeeded')
+        r=cv.verify_cv(self.root);self.assertEqual(r['memoryGuard']['policyOrigin'],'skill')
+        env=core.read(self.root/'cv/cached-native/worker-environment.json');self.assertFalse(env['heavyCvImports'])
+        self.assertEqual(len(core.read(self.root/'cv/cached-native/shots.json')['shots']),16)
+    def test_native_missing_filter_fails_without_adaptive_fallback(self):
+        self.acquire();wrapper=Path(self.helper.root_temp.name)/'ffmpeg-no-scdet'
+        wrapper.write_text('#!'+sys.executable+'\nimport os,sys\nif "filter=scdet" in sys.argv: print("Unknown filter");sys.exit(0)\nos.execv('+repr(self.ffmpeg)+', ['+repr(self.ffmpeg)+']+sys.argv[1:])\n');wrapper.chmod(0o755)
+        with patch.dict('os.environ',{'IMAGEIO_FFMPEG_EXE':str(wrapper)}):result=cv.probe_cv(self.root,attempt_id='no-filter')
+        self.assertEqual(result['status'],'failed');self.assertEqual(core.read(self.root/'cv/no-filter/status.json')['errorCode'],'ffmpeg_scdet_unavailable')

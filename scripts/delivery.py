@@ -54,7 +54,7 @@ def export_report(root,destination):
             cv=public.get('cv',{})
             if cv.get('attemptId'):
                 prefix='cv/'+cv['attemptId']+'/'
-                selected=['config.json','resources.ndjson','shots.json','status.json','receipt.json','worker-environment.json','boundaries.ndjson','supervisor-failure.json','worker-failure.json']+[s['frameRef'] for s in cv.get('shots',[]) if s['representativeStatus']=='available']
+                selected=['config.json','resources.ndjson','shots.json','status.json','receipt.json','worker-environment.json','boundaries.ndjson','supervisor-failure.json','worker-failure.json','memory-guard.json']+[s['frameRef'] for s in cv.get('shots',[]) if s['representativeStatus']=='available']
                 for relative in selected:
                     if (root/prefix/relative).exists():
                         src=safe_file(root,prefix+relative);target=scratch/prefix/relative;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,target)

@@ -117,7 +117,7 @@ def cgroup_snapshot():
                 else:continue
                 directory=mount_point/relative
                 result={'version':2 if v2 else 1, 'status':'available'}
-                names=('memory.current','memory.max','memory.peak','memory.events','memory.events.local') if v2 else ('memory.usage_in_bytes','memory.limit_in_bytes','memory.max_usage_in_bytes','memory.failcnt','memory.oom_control')
+                names=('memory.current','memory.max','memory.peak','memory.events','memory.events.local','memory.stat','memory.pressure') if v2 else ('memory.usage_in_bytes','memory.limit_in_bytes','memory.max_usage_in_bytes','memory.failcnt','memory.oom_control','memory.stat','memory.pressure')
                 for name in names:
                     try:result[name]=(directory/name).read_text().strip()
                     except OSError:result[name]=None
@@ -485,8 +485,8 @@ def main(argv=None):
     import argparse
     parser=argparse.ArgumentParser(description='A获取一条视频，B离线CV切分与资源测试；无ASR/模型调用')
     commands=parser.add_subparsers(dest='command',required=True)
-    commands.add_parser('preflight').add_argument('--cv',action='store_true')
-    p=commands.add_parser('probe-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--profile',choices=['low-memory'],default='low-memory');p.add_argument('--attempt-id');p.add_argument('--config-file',type=Path)
+    p=commands.add_parser('preflight');p.add_argument('--cv',action='store_true');p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'],default='ffmpeg-scene')
+    p=commands.add_parser('probe-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--profile',choices=['low-memory'],default='low-memory');p.add_argument('--attempt-id');p.add_argument('--config-file',type=Path);p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'])
     p=commands.add_parser('verify-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--attempt-id')
     p=commands.add_parser('export-report');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
     p=commands.add_parser('verify-export');p.add_argument('--bundle-dir',type=Path,required=True)
@@ -501,12 +501,12 @@ def main(argv=None):
             result=preflight()
             if args.cv:
                 from cv_probe import dependency_status
-                result['cv']=dependency_status()
+                result['cv']=dependency_status(args.backend)
                 if result['cv']['status']!='ready':result['status']='dependency_missing'
             print(json.dumps(result,ensure_ascii=False));return 0 if result['status']=='ready' else 2
         elif args.command=='probe-cv':
             from cv_probe import probe_cv
-            result=probe_cv(external_root(args.run_dir),attempt_id=args.attempt_id,config_file=args.config_file)
+            result=probe_cv(external_root(args.run_dir),attempt_id=args.attempt_id,config_file=args.config_file,backend=args.backend)
         elif args.command=='verify-cv':
             from cv_probe import verify_cv
             receipt=verify_cv(external_root(args.run_dir),args.attempt_id);result={'status':'verified','cvStatus':receipt['status']}

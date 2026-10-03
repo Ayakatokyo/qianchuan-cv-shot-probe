@@ -7,5 +7,9 @@
   "minShotSec": 0.2,
   "adaptiveThreshold": 3.0,
   "windowWidth": 2,
-  "minContentVal": 15.0
+  "minContentVal": 15.0,
+  "backend": "ffmpeg-scene",
+  "sceneThreshold": 10.0,
+  "memoryHardFraction": 0.95,
+  "maxProcessTreeRssMiB": 256
 }

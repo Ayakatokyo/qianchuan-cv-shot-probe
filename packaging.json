@@ -98,6 +98,14 @@
     {
       "source": "references/cv-contract.md",
       "destination": "references/cv-contract.md"
+    },
+    {
+      "source": "scripts/native_cv_worker.py",
+      "destination": "scripts/native_cv_worker.py"
+    },
+    {
+      "source": "scripts/memory_guard.py",
+      "destination": "scripts/memory_guard.py"
     }
   ]
 }

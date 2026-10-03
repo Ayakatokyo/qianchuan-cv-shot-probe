@@ -10,16 +10,22 @@ import sys
 import time
 import uuid
 
+from memory_guard import evaluate_guard, process_tree_rss
 from probe_core import ROOT,ProbeError,Resources,artifact,cgroup_snapshot,digest,fingerprint,read,write,run_lock,safe_file,verify,probe_media,resource_summary,safe_error
 
 PINNED={'numpy':'2.2.6','opencv-python-headless':'4.11.0.86','scenedetect':'0.6.7.1'}
 
-def dependency_status():
+def _installed(name):
+    try:version(name);return True
+    except PackageNotFoundError:return False
+
+def dependency_status(backend='ffmpeg-scene'):
+    expected=PINNED if backend=='adaptive' else {'imageio-ffmpeg':version('imageio-ffmpeg') if _installed('imageio-ffmpeg') else '0.6.0'}
     observed={}
-    for name in PINNED:
+    for name in expected:
         try:observed[name]=version(name)
         except PackageNotFoundError:observed[name]='unavailable'
-    return {'status':'ready' if observed==PINNED else 'dependency_missing_or_version_mismatch','observed':observed,'expected':PINNED,'importChecked':False,'importCheck':'runs in monitored CV worker','requirementsPath':str(ROOT/'requirements-cv.txt')}
+    return {'status':'ready' if observed==expected else 'dependency_missing_or_version_mismatch','observed':observed,'expected':expected,'importChecked':False,'importCheck':'runs in monitored CV worker','backend':backend,'requirementsPath':str(ROOT/('requirements-cv.txt' if backend=='adaptive' else 'requirements.txt'))}
 
 def memory_usage(snapshot):
     if snapshot.get('status')!='available':return None
@@ -88,17 +94,18 @@ def stop_group(process):
 
 def config_value(path=None):
     config=read(path or ROOT/'config/cv-low-memory.json')
-    expected={'profile','maxDimension','maxShots','timeoutSec','memoryGuardFraction','minShotSec','adaptiveThreshold','windowWidth','minContentVal'}
+    expected={'profile','maxDimension','maxShots','timeoutSec','memoryGuardFraction','minShotSec','adaptiveThreshold','windowWidth','minContentVal','backend','sceneThreshold','memoryHardFraction','maxProcessTreeRssMiB'}
     if set(config)!=expected or config['profile']!='low-memory':raise ProbeError('cv_config_invalid')
-    for key in expected-{'profile'}:
+    if config['backend'] not in ('ffmpeg-scene','adaptive'):raise ProbeError('cv_config_invalid')
+    for key in expected-{'profile','backend'}:
         if not isinstance(config[key],(int,float)) or isinstance(config[key],bool) or not math.isfinite(config[key]):raise ProbeError('cv_config_invalid')
-    if not (1<=config['maxDimension']<=320 and 1<=config['maxShots']<=300 and 0.05<=config['timeoutSec']<=300 and .5<=config['memoryGuardFraction']<=.8 and .01<=config['minShotSec']<=2 and 1<=config['windowWidth']<=8 and config['adaptiveThreshold']>0 and config['minContentVal']>0):raise ProbeError('cv_config_invalid')
+    if not (1<=config['maxDimension']<=320 and 1<=config['maxShots']<=300 and 0.05<=config['timeoutSec']<=300 and .5<=config['memoryGuardFraction']<=.8 and .01<=config['minShotSec']<=2 and 1<=config['windowWidth']<=8 and config['adaptiveThreshold']>0 and config['minContentVal']>0 and 0<config['sceneThreshold']<=100 and .9<=config['memoryHardFraction']<=.97 and 32<=config['maxProcessTreeRssMiB']<=512):raise ProbeError('cv_config_invalid')
     for key in ('maxDimension','maxShots','windowWidth'):
         if not isinstance(config[key],int):raise ProbeError('cv_config_invalid')
     return config
 
 def implementation_sha():
-    return fingerprint({name:digest(ROOT/'scripts'/name) for name in ('cv_probe.py','cv_worker.py','probe_core.py')})
+    return fingerprint({name:digest(ROOT/'scripts'/name) for name in ('cv_probe.py','cv_worker.py','native_cv_worker.py','memory_guard.py','probe_core.py')})
 
 def verify_cv(root,attempt_id=None):
     acquisition=verify(root)
@@ -130,14 +137,17 @@ def cv_status(root):
     if observed=='running' and not recorded_process_alive(state):observed='interrupted'
     receipt=read(attempt/'receipt.json') if (attempt/'receipt.json').exists() else {}
     data=read(attempt/'shots.json') if (attempt/'shots.json').exists() else {}
-    return {'status':observed,'attemptId':attempt_id,'stage':state.get('stage'),'failureStage':state.get('failureStage'),'errorCode':state.get('errorCode'),'exitCode':receipt.get('workerExitCode'),'signal':receipt.get('signal'),'config':read(attempt/'config.json'),
+    return {'status':observed,'attemptId':attempt_id,'stage':state.get('stage'),'failureStage':state.get('failureStage'),'errorCode':state.get('errorCode'),'exitCode':receipt.get('workerExitCode'),'signal':receipt.get('signal'),'config':read(attempt/'config.json'),'memoryGuard':receipt.get('memoryGuard'),
             'frameCount':data.get('frameCount'),'shotCount':len(data.get('shots',[])),'detectionStatus':data.get('detectionStatus'),'representativeStatus':data.get('representativeStatus'),
             'sourceStartPtsSec':data.get('sourceStartPtsSec'),'durationSec':data.get('durationSec'),'timeMapping':data.get('timeMapping'),'variableFrameIntervalsObserved':data.get('variableFrameIntervalsObserved'),
             'memoryObservation':resource_summary(attempt),'cgroupCounterDelta':receipt.get('cgroupCounterDelta'),'processCleanup':receipt.get('processCleanup'),'terminationDiagnosis':receipt.get('terminationDiagnosis'),'oomAttribution':'Counters belong to the visible shared cgroup; delta alone does not identify this worker.',
             'dependencies':read(attempt/'worker-environment.json') if (attempt/'worker-environment.json').exists() else None,'shots':data.get('shots',[])}
 
-def probe_cv(root,*,attempt_id=None,config_file=None):
-    root=Path(root);config=config_value(config_file);impl=implementation_sha()
+def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
+    root=Path(root);config=config_value(config_file)
+    if backend:config['backend']=backend
+    if config['backend'] not in ('ffmpeg-scene','adaptive'):raise ProbeError('cv_config_invalid')
+    impl=implementation_sha()
     if attempt_id and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}',attempt_id):raise ProbeError('cv_attempt_id_invalid')
     with run_lock(root):
         acquisition=verify(root);video=safe_file(root,'media/source-video.mp4');video_sha=digest(video)
@@ -165,8 +175,9 @@ def probe_cv(root,*,attempt_id=None,config_file=None):
         before=cgroup_snapshot();process=None;error=None;cleanup={'status':'not_started'};started=time.monotonic()
         with Resources(attempt):
             try:
-                usage=memory_usage(before)
-                if usage and usage[0]>=usage[1]*config['memoryGuardFraction']:raise ProbeError('insufficient_headroom')
+                guard=evaluate_guard(before,config,baseline=before)
+                write(attempt/'memory-guard.json',guard)
+                if guard['abort']:raise ProbeError('insufficient_headroom')
                 actual_media=probe_media(video)
                 job={'attemptDir':str(attempt),'videoPath':str(video),'videoSha256':video_sha,'media':actual_media,'config':config,'implementationSha256':impl}
                 write(attempt/'job.json',job)
@@ -174,14 +185,15 @@ def probe_cv(root,*,attempt_id=None,config_file=None):
                 for key in ('YUCE_AUTHORIZATION','YCSESSIONID','YUCE_SESSION_ID'):env.pop(key,None)
                 for key in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS','NUMEXPR_NUM_THREADS'):env[key]='1'
                 with (attempt/'worker.stdout.log').open('w') as out,(attempt/'worker.stderr.log').open('w') as err:
-                    process=subprocess.Popen([sys.executable,'-B',str(ROOT/'scripts/cv_worker.py'),str(attempt/'job.json')],stdout=out,stderr=err,env=env,start_new_session=True)
+                    process=subprocess.Popen([sys.executable,'-B',str(ROOT/'scripts'/('native_cv_worker.py' if config['backend']=='ffmpeg-scene' else 'cv_worker.py')),str(attempt/'job.json')],stdout=out,stderr=err,env=env,start_new_session=True)
                     binding={'workerPid':process.pid,'workerStartTicks':process_identity(process.pid)}
                     write(attempt/'process.json',binding)
                     state=read(attempt/'status.json');state.update(binding);write(attempt/'status.json',state)
                     while process.poll() is None:
                         if time.monotonic()-started>config['timeoutSec']:raise ProbeError('cv_timeout')
-                        usage=memory_usage(cgroup_snapshot())
-                        if usage and usage[0]>usage[1]*config['memoryGuardFraction']:raise ProbeError('memory_guard_aborted')
+                        guard=evaluate_guard(cgroup_snapshot(),config,baseline=before,tree_rss=process_tree_rss(os.getpid()))
+                        write(attempt/'memory-guard.json',guard)
+                        if guard['abort']:raise ProbeError('memory_guard_aborted')
                         time.sleep(.2)
                 if time.monotonic()-started>config['timeoutSec']:raise ProbeError('cv_timeout')
                 worker_state=read(attempt/'status.json')
@@ -200,7 +212,7 @@ def probe_cv(root,*,attempt_id=None,config_file=None):
         after=cgroup_snapshot();start_counts=oom_counters(before);end_counts=oom_counters(after)
         delta={key:end_counts[key]-value for key,value in start_counts.items() if key in end_counts}
         exit_code=process.returncode if process is not None else None
-        receipt={'status':'failed' if error else 'succeeded','errorCode':error,'inputVideoSha256':video_sha,'bindingSha256':signature,'implementationSha256':impl,'workerExitCode':exit_code,'signal':-exit_code if exit_code is not None and exit_code<0 else None,'elapsedSec':time.monotonic()-started,'cgroupBefore':before,'cgroupAfter':after,'cgroupCounterDelta':delta,'processCleanup':cleanup,'terminationDiagnosis':{'classification':'oom_evidence_observed' if any(v>0 for k,v in delta.items() if k.endswith('.oom_kill')) else ('signal_terminated_unknown' if exit_code is not None and exit_code<0 else 'no_signal_observed'),'attribution':'shared_cgroup_evidence_does_not_prove_worker_cause'},
+        receipt={'status':'failed' if error else 'succeeded','errorCode':error,'inputVideoSha256':video_sha,'bindingSha256':signature,'implementationSha256':impl,'workerExitCode':exit_code,'signal':-exit_code if exit_code is not None and exit_code<0 else None,'elapsedSec':time.monotonic()-started,'cgroupBefore':before,'cgroupAfter':after,'cgroupCounterDelta':delta,'processCleanup':cleanup,'memoryGuard':read(attempt/'memory-guard.json'),'terminationDiagnosis':{'classification':'skill_guard_terminated' if error in ('memory_guard_aborted','insufficient_headroom') else 'skill_timeout_terminated' if error=='cv_timeout' else 'oom_evidence_observed' if any(v>0 for k,v in delta.items() if k.endswith('.oom_kill')) else ('signal_terminated_unknown' if exit_code is not None and exit_code<0 else 'no_signal_observed'),'attribution':'shared_cgroup_evidence_does_not_prove_worker_cause'},
                  'artifacts':[artifact(p,attempt) for p in sorted(attempt.rglob('*')) if p.is_file()]}
         write(attempt/'receipt.json',receipt)
         if not error:
