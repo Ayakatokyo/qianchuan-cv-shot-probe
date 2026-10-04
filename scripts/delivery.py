@@ -1,5 +1,6 @@
 """Export and verify a self-contained public report bundle, without private acquisition files."""
 from pathlib import Path
+from runtime_memory import check_stage, release_completed
 import os
 import re
 import shutil
@@ -42,6 +43,8 @@ def export_report(root,destination):
     fd,tmpzip=tempfile.mkstemp(prefix='.report-bundle-',suffix='.zip',dir=destination.parent);os.close(fd)
     try:
         with run_lock(root):
+            release_completed(root,'export_precheck')
+            check_stage(root,'export')
             report(root)
             public=read(root/'report/report.json')
             for relative in ('report/index.html','report/report.json','report/receipt.json','resources.ndjson'):
@@ -54,10 +57,12 @@ def export_report(root,destination):
             cv=public.get('cv',{})
             if cv.get('attemptId'):
                 prefix='cv/'+cv['attemptId']+'/'
-                selected=['config.json','resources.ndjson','shots.json','status.json','receipt.json','worker-environment.json','boundaries.ndjson','supervisor-failure.json','worker-failure.json','memory-guard.json']+[s['frameRef'] for s in cv.get('shots',[]) if s['representativeStatus']=='available']
+                selected=['config.json','resources.ndjson','shots.json','status.json','receipt.json','worker-environment.json','boundaries.ndjson','supervisor-failure.json','worker-failure.json','memory-guard.json','memory-admission.json','guard-samples.ndjson']+[s['frameRef'] for s in cv.get('shots',[]) if s['representativeStatus']=='available']
                 for relative in selected:
                     if (root/prefix/relative).exists():
                         src=safe_file(root,prefix+relative);target=scratch/prefix/relative;target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,target)
+            for relative in ('phase-memory.ndjson','phase-memory.json','cache-advice.ndjson'):
+                if (root/relative).exists():shutil.copy2(safe_file(root,relative),scratch/relative)
             artifacts=[artifact(p,scratch) for p in sorted(scratch.rglob('*')) if p.is_file()]
             write(scratch/'bundle-manifest.json',{'schemaVersion':1,'status':public['status'],'containsPrivateSources':False,'artifacts':artifacts})
             verify_export(scratch)
@@ -69,6 +74,7 @@ def export_report(root,destination):
                 expected={p.relative_to(scratch).as_posix() for p in scratch.rglob('*') if p.is_file()}
                 if set(z.namelist())!=expected:raise ProbeError('delivery_zip_incomplete')
             os.rename(scratch,destination);os.replace(tmpzip,archive)
+        release_completed(root,'export_complete')
         return {'status':'exported','bundleDir':str(destination),'zipPath':str(archive),'zipSha256':digest(archive),'containsVideo':bool(public.get('videoPath')),'fileCount':len(artifacts)+1}
     finally:
         if scratch.exists():shutil.rmtree(scratch)

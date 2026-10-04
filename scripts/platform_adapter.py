@@ -4,6 +4,7 @@ from pathlib import Path
 from config_specs import resolve_query_spec, query_spec_to_query_config
 from field_registry import load_field_registry
 from material_query import execute_material_query
+from record_stream import FileRecords
 from qianchuan_report_client import fetch_material_report
 from rpa_csv_parser import parse_diagnosis_csv
 from probe_core import ProbeError, ROOT, resource_id, read, write, artifact
@@ -33,12 +34,13 @@ def select(request,root,gateway):
     registry=load_field_registry(ROOT/'config/asset-field-registry-v1.json')
     query=query_spec_to_query_config(resolve_query_spec(spec,registry))
     source=root/'acquisition/report-records.json'
-    if source.exists():records=read(source)
+    if source.exists():records=FileRecords(source)
     else:
         rank=query['sort']; field=registry.require(rank['field'])['source'][1]
-        records=fetch_material_report(request['api_shop'],advertiser,query['period']['startDate'],query['period']['endDate'],output_dir=root/'acquisition/report-source',order_by=[{'field':field,'type':2 if rank['direction']=='desc' else 1}],session=gateway.session)
-        write(source,records)
-    material=execute_material_query(records,query,registry)['materials']
+        records=fetch_material_report(request['api_shop'],advertiser,query['period']['startDate'],query['period']['endDate'],output_dir=root/'acquisition/report-source',order_by=[{'field':field,'type':2 if rank['direction']=='desc' else 1}],session=gateway.session,stream=True)
+        if isinstance(records,FileRecords):source=records.path
+        else:write(source,records) # Small inline gateway payload compatibility.
+    material=execute_material_query(records,query,registry,bounded=True)['materials']
     if not material:raise ProbeError('selection_empty')
     write(root/'acquisition/selection-source.json',artifact(source,root))
     return material[0],{'material_id':material[0]['materialId'],'date_type':'CUSTOM','custom_start_date':query['period']['startDate'],'custom_end_date':query['period']['endDate']}

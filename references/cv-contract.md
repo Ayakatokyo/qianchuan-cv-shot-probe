@@ -1,4 +1,4 @@
-# 分镜与内存契约（0.3.0）
+# 分镜与内存契约（0.4.0）
 
 B复用A成功收据绑定的视频，先验证原CSV/视频SHA；不重提API/RPA或重新下载。成功缓存绑定实现/视频/配置/backend；显式新attempt-id用于重复测试，保留旧状态/收据。
 
@@ -27,3 +27,15 @@ A video_ready保持，B独立not_run/running/succeeded/failed/interrupted；运�
 render-report含视频、全部镜头/代表帧/跳转和失败/资源证据。export-report导出report+合法源视频+A/B资源+CV配置/状态/收据/环境/诊断/镜头/全部帧/守卫，verify-export校验清单/哈希/引用。私有CSV/URL/账号/job/原始解码日志留原目录。交付生成的完整bundle ZIP；report归档器若只导出3个report文件，不能当作含视频交付。
 
 生意高手每平台需原A目录B单次/显式三次运行、真实视频人工切分和内存核验。本地合成视频/缓存快照回归/最小依赖验证均不替代1GiB目标沙箱验收。当前无ASR/OCR/脚本对齐/Agent二次分析。
+
+## 0.4.0当前补充
+
+config/memory-policy.json规定阶段启动余量，B128MiB基于原始占用距离技能95%停止线计算（1GiB额度时B需raw占用不超过约844.8MiB），不把inactive_file抵扣成保证可用容量。运行中仍沿用80%工作集估算/95%总占用/256MiB进程树/共享压力事件；额度不可读即unknown，无假余量。统计扣减字段缺失时列出missingReclaimDeductionFields，估算仍不是保证可回收容量。
+
+A阶段不足以paused/insufficient_stage_headroom保存状态，明确授权resume后复用已绑定选择/任务。B不足仍failed/insufficient_headroom，保存memory-admission和memory-guard，无worker退出码；不要诊断为FFmpeg被OOM杀死。包版本/策略/实现哈希绑定成功缓存，旧0.3.0成功不会掩盖新版实际执行。
+
+B验证A收据后复用已校验媒体参数；下载时流式计算SHA生成下载收据，恢复、A成功报告、B输入/worker及完成校验仍保留独立内容校验。资源采样增加Mac ps进程树RSS；全过程峰值由resources.ndjson及B guard-samples.ndjson聚合，HWM与采样RSS口径有别，RSS求和可能重复共享页，采样可能漏峰。
+
+对当前运行目录acquisition/media内完成的普通文件执行fsync和POSIX_FADV_DONTNEED建议。Linux支持不等于一定回收；Mac不支持则记录supported=false，失败记录errno，不修改系统缓存/额度、不删除文件。cache-advice的前后cgroup差值不归因单一文件或技能。报告完整包新增phase-memory、cache-advice、memory-admission和guard-samples诊断；不包含原CSV/账号/签名URL。临时导出副本的缓存回收尚未覆盖，导出32MiB仅为试验准入预算。
+
+0.4.0本机回归不能代替目标Linux1GiB沙箱验收；下一步测两平台A+B三次、缓存建议效果、峰值与人工镜头质量。宿主音频转写、脚本对齐与二次分析后置。

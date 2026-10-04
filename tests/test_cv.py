@@ -150,7 +150,7 @@ class CvTests(unittest.TestCase):
     def test_native_run_with_cache_heavy_logged_baseline_and_guard_evidence(self):
         self.acquire(self.multi)
         from test_memory_guard import snapshot
-        observed=snapshot()
+        observed=snapshot(usage=840)
         with patch.object(cv,'cgroup_snapshot',return_value=observed):result=cv.probe_cv(self.root,attempt_id='cached-native')
         self.assertEqual(result['status'],'succeeded')
         r=cv.verify_cv(self.root);self.assertEqual(r['memoryGuard']['policyOrigin'],'skill')
@@ -161,3 +161,15 @@ class CvTests(unittest.TestCase):
         wrapper.write_text('#!'+sys.executable+'\nimport os,sys\nif "filter=scdet" in sys.argv: print("Unknown filter");sys.exit(0)\nos.execv('+repr(self.ffmpeg)+', ['+repr(self.ffmpeg)+']+sys.argv[1:])\n');wrapper.chmod(0o755)
         with patch.dict('os.environ',{'IMAGEIO_FFMPEG_EXE':str(wrapper)}):result=cv.probe_cv(self.root,attempt_id='no-filter')
         self.assertEqual(result['status'],'failed');self.assertEqual(core.read(self.root/'cv/no-filter/status.json')['errorCode'],'ffmpeg_scdet_unavailable')
+
+    def test_cv_reserve_blocks_below_raw_stop_and_no_second_media_probe(self):
+        self.acquire()
+        from test_memory_guard import snapshot
+        with patch.object(cv,'cgroup_snapshot',return_value=snapshot(usage=850)):
+            result=cv.probe_cv(self.root,attempt_id='reserve-block')
+        self.assertEqual(result['status'],'failed')
+        guard=core.read(self.root/'cv/reserve-block/memory-guard.json')
+        self.assertEqual(guard['reason'],'insufficient_stage_headroom')
+        self.assertIsNone(core.read(self.root/'cv/reserve-block/receipt.json')['workerExitCode'])
+        with patch.object(cv,'probe_media',side_effect=AssertionError('A media already verified')):
+            self.assertEqual(cv.probe_cv(self.root,attempt_id='reserve-ok')['status'],'succeeded')

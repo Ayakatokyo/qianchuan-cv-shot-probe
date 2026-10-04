@@ -10,6 +10,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from date_policy import validate_period
+from record_stream import FileRecords
+from probe_core import ProbeError
 
 
 FUNCTION_CODE = "OCEANENGINE_UNI_PROMOTION_PLAN_DATA_REQUESTS_ZDY"
@@ -295,7 +297,7 @@ def _write_stage_status(source_dir, stage, status, **details):
     _write_json(Path(source_dir) / (stage + "-status.json"), payload)
 
 
-def _records_from_result(result, source_dir, session):
+def _records_from_result(result, source_dir, session, *, stream=False):
     data = result.get("data")
     if isinstance(data, list):
         _write_stage_status(source_dir, "result-download", "not_required")
@@ -305,7 +307,7 @@ def _records_from_result(result, source_dir, session):
         raise ReportClientError("material report response is missing data")
     content = data.get("result_content")
     if data.get("result_type") == "files":
-        return _records_from_files(content, source_dir, session)
+        return _records_from_files(content, source_dir, session, stream=stream)
     if data.get("result_type") == "payload":
         content = content.get("payload") if isinstance(content, dict) else content
     if isinstance(content, str):
@@ -320,7 +322,7 @@ def _records_from_result(result, source_dir, session):
     return _validate_records(content)
 
 
-def _records_from_files(content, source_dir, session):
+def _records_from_files(content, source_dir, session, *, stream=False):
     if not isinstance(content, dict) or content.get("status") != "COMPLETED" or content.get("failedInstances", 0) != 0:
         raise ReportClientError("material report files task did not complete")
     files = content.get("files")
@@ -333,7 +335,7 @@ def _records_from_files(content, source_dir, session):
     raw_path = source_dir / filename
     try:
         _download_file(file_url, raw_path, session)
-    except ReportClientError as exc:
+    except (ReportClientError, ProbeError) as exc:
         _write_stage_status(
             source_dir, "result-download", "failed", filename=filename, error=str(exc)
         )
@@ -343,6 +345,19 @@ def _records_from_files(content, source_dir, session):
             "see result-download-status.json"
         ) from exc
     _write_stage_status(source_dir, "result-download", "completed", filename=filename)
+    if stream:
+        try:
+            records=FileRecords(raw_path,kind='csv')
+            count=0
+            for record in records:
+                _validate_record_fields([record]);count+=1
+            if not count:raise ReportClientError('material report payload must be non-empty')
+            records.count=count
+        except (ValueError, OSError, UnicodeError, csv.Error, ReportClientError) as exc:
+            _write_stage_status(source_dir,'result-parse','failed',filename=filename,error=str(exc))
+            raise ReportClientError('material report CSV stream validation failed') from exc
+        _write_stage_status(source_dir,'result-parse','completed',filename=filename,recordCount=count,storage='raw_csv_only')
+        return records
     structured_path = raw_path.with_suffix(raw_path.suffix + ".structured.json")
     records = []
     try:
@@ -385,7 +400,7 @@ def _validate_gateway_result(result):
 
 
 def fetch_material_report(
-    shop_id, advertiser_id, start_date, end_date, *, output_dir, order_by=None, environ=None, session=None
+    shop_id, advertiser_id, start_date, end_date, *, output_dir, order_by=None, environ=None, session=None, stream=False
 ):
     if not str(shop_id or "").strip():
         raise ReportClientError("shop ID is required")
@@ -423,7 +438,7 @@ def fetch_material_report(
         "completed",
         resultType=result.get("data", {}).get("result_type") if isinstance(result.get("data"), dict) else None,
     )
-    records = _records_from_result(result, source_dir, session)
-    _validate_record_fields(records)
+    records = _records_from_result(result, source_dir, session, stream=stream)
+    if not isinstance(records,FileRecords):_validate_record_fields(records)
     _write_field_manifest(source_dir, advertiser_id, start_date, end_date, order_by, records)
     return records

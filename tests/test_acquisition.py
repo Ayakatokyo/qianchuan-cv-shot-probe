@@ -237,3 +237,32 @@ class AcquisitionTests(unittest.TestCase):
         with patch('probe_core.shutil.which',return_value='/fake/ffprobe'),patch('probe_core.subprocess.run') as run:
             run.return_value=type('R',(),{'returncode':0,'stdout':json.dumps({'streams':[{'codec_type':'video','codec_name':'h264','width':3840,'height':2160,'avg_frame_rate':'25/1'}],'format':{'duration':'1'}})})()
             with self.assertRaises(core.ProbeError):core.probe_media(self.video)
+
+    def test_stage_pause_preserves_selection_and_resume_no_reselection(self):
+        import runtime_memory
+        original=runtime_memory.check_stage
+        def stop(root,stage):
+            if stage=='detail_rpa':raise core.ProbeError('insufficient_stage_headroom')
+            return original(root,stage)
+        root=Path(self.root_temp.name)/'paused'
+        with patch.object(runtime_memory,'check_stage',side_effect=stop):
+            with self.assertRaises(core.ProbeError):core.acquire(request(),root)
+        self.assertEqual(core.read(root/'status.json')['status'],'paused')
+        self.assertTrue((root/'acquisition/selection.json').exists());self.assertEqual(self.state['submits'],0)
+        with patch.object(adapter,'select',side_effect=AssertionError('saved selection must be reused')):
+            self.assertEqual(core.acquire(request(),root,resume=True)['status'],'video_ready')
+
+    def test_changed_paused_selection_cannot_bypass_binding(self):
+        import runtime_memory
+        original=runtime_memory.check_stage
+        def stop(root,stage):
+            if stage=='detail_rpa':raise core.ProbeError('insufficient_stage_headroom')
+            return original(root,stage)
+        root=Path(self.root_temp.name)/'paused-changed'
+        with patch.object(runtime_memory,'check_stage',side_effect=stop):
+            with self.assertRaises(core.ProbeError):core.acquire(request(),root)
+        selection=core.read(root/'acquisition/selection.json');selection['params']['unexpected']='changed'
+        core.write(root/'acquisition/selection.json',selection)
+        submitted=self.state['submits']
+        with self.assertRaises(core.ProbeError) as error:core.acquire(request(),root,resume=True)
+        self.assertEqual(error.exception.code,'selected_sample_changed');self.assertEqual(self.state['submits'],submitted)

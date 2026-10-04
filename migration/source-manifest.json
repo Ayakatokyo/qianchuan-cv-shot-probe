@@ -19,7 +19,8 @@
       "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/material_query.py",
       "destination": "scripts/material_query.py",
       "sourceSha256": "84a6512e8856c2ff72081c3bb462f38a1be00a58f15f2ee15348ca2be561c01b",
-      "localSha256": "84a6512e8856c2ff72081c3bb462f38a1be00a58f15f2ee15348ca2be561c01b"
+      "localSha256": "547c38382a7c8b4a786ec8017fc956f4ab3e70813f64160c4248c09abdd9c29e",
+      "localChange": "0.4.0新增有界TOPN流式路径，保留排序/过滤/计数/重复ID语义；默认旧调用兼容"
     },
     {
       "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/field_registry.py",
@@ -37,8 +38,8 @@
       "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/qianchuan_report_client.py",
       "destination": "scripts/qianchuan_report_client.py",
       "sourceSha256": "cb5f305cca4e4a66b03a5780ab66d2a07c77666fbf01000e52141c6740329379",
-      "localSha256": "0e93bbac77940ccc9608fe4df16bbf3bb3b672b6f3ae9ef90f063d4a49eee796",
-      "localChange": "下载报表CSV改用本包32MiB有界下载；不沿用网关会话向CDN发送Cookie；API字段与报表调用保持来源契约"
+      "localSha256": "5f85a9905fc8b1a4ecca31595a7c950e1df59868b424be527cabdc2b0511ea88",
+      "localChange": "32MiB独立CDN下载；0.4.0 files结果以原CSV作流式检查点，全部指标校验、不生成全量JSON；内联payload旧路径兼容"
     },
     {
       "source": "/Users/shuzida/Desktop/skill统一管理/repositories/qianchuan-meta-skill/scripts/rpa_csv_parser.py",

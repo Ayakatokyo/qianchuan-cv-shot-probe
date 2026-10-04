@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "stageReserveMiB": {
+    "selection": 128,
+    "detail_rpa": 32,
+    "video_download": 32,
+    "media_probe": 64,
+    "cv_precheck": 128,
+    "export": 32
+  },
+  "note": "Experimental reserves below the Skill raw emergency ceiling; not free RAM or a sandbox guarantee."
+}

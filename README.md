@@ -1,10 +1,10 @@
 # 千川视频CV分镜沙箱样本
 
-稳定ID `qianchuan-cv-shot-probe`，当前0.3.0（A+B）。A修复已先提交并推送后才开发B；A门禁、整数时长容差、失败信息与完整导出保留。B默认复用视频执行受监督的FFmpeg原生镜头检测、逐镜头代表帧和技术报告。业务入口见[SKILL.md](SKILL.md)，参数及限制见[CV契约](references/cv-contract.md)。
+稳定ID `qianchuan-cv-shot-probe`，当前0.4.0（A+B）。A修复已先提交并推送后才开发B；A门禁、整数时长容差、失败信息与完整导出保留。B默认复用视频执行受监督的FFmpeg原生镜头检测、逐镜头代表帧和技术报告。业务入口见[SKILL.md](SKILL.md)，参数及限制见[CV契约](references/cv-contract.md)。
 
 - 依赖：Python3.12当前验证环境；同环境binary-only安装requirements-dev.txt用于开发，requirements.txt用于默认沙箱A+B；requirements-cv.txt仅用于显式adaptive对照。默认无重型CV导入，无ASR/OCR/模型。
 - 入口：python scripts/run.py preflight --cv；probe-cv复用A运行目录，verify-cv检查收据；export-report/verify-export交付完整报告ZIP。
-- 验证：python -B tools/test.py（42项，包括实际合成视频硬切、单镜头、VFR、损坏解码、代表帧失败、超时/SIGKILL/内存门禁及资源篡改）。合成案例不代表真实视频镜头质量或1GiB内存验收。
+- 验证：python -B tools/test.py（54项，包括实际合成视频硬切、单镜头、VFR、损坏解码、代表帧失败、超时/SIGKILL/内存门禁及资源篡改）。合成案例不代表真实视频镜头质量或1GiB内存验收。
 - 构建：python -B tools/build.py；packaging.json显式运行文件清单；开发工具/测试/CI不入运行包。
 - 迁移来源见migration/source-manifest.json；本仓独立副本，运行时不引用兄弟仓。
 - 原始客户附件留Downloads，运行目录、媒体、环境、凭证均在仓外，不进入Git。
@@ -12,7 +12,15 @@
 
 [唯一当前进度](../../项目管理/docs/AI短视频Skill开发批次进度.md) / [样本设计](../../项目管理/docs/规划/2026-10-03-千川云图CV分镜沙箱样本技能设计.md)。
 
-内存守卫属于技能可配置策略；硬额度属于沙箱。0.3.0区分缓存、工作集估算、原始紧急上限、进程树预算和压力事件，见CV契约。最小依赖测试：python -B tools/test_native.py（41项，不含需要CV依赖的显式adaptive对照）。
+内存守卫属于技能可配置策略；硬额度属于沙箱。0.3.0区分缓存、工作集估算、原始紧急上限、进程树预算和压力事件，见CV契约。最小依赖测试：python -B tools/test_native.py（53项，不含需要CV依赖的显式adaptive对照）。
+
+## 当前候选0.4.0（2026-10-04）
+
+两平台增加config/memory-policy.json阶段准入、当前运行文件缓存释放建议、Mac进程树RSS和raw/工作集/cache/anon观测峰值；B复用A已验证媒体参数，流式下载生成SHA收据。A余量不足paused，明确恢复复用已绑定选择/任务；B预留128MiB到技能95%停止线，未到停止线也可能被拦截。保留原运行中守卫和独立内容校验。Linux文件缓存建议效力和1GiB平台稳定性仍待真实验证，不宣称Mac通过等于沙箱安全。
+
+千川files报表直接流式读原CSV、有界TOP1，去掉两份全量结构化JSON；旧JSON数组流式兼容、完整原始证据与全表字段/重复ID校验保留。内联payload暂仍有全量响应对象。
+
+当前main HEAD是下方0.3.0检查点；0.4.0为HEAD + 未提交修改，检查点已推送，优化未再次commit/push、未发布。离线验证和新包见项目管理唯一进度。
 
 ## 内存优化前检查点（2026-10-04）
 

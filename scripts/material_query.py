@@ -178,9 +178,10 @@ def _metrics_for_row(row, registry):
     return metrics, unavailable
 
 
-def execute_material_query(raw_rows, raw_query, registry):
+def execute_material_query(raw_rows, raw_query, registry, *, bounded=False):
     query = parse_query_config(raw_query, registry)
-    raw_rows = list(raw_rows)
+    if not bounded:raw_rows = list(raw_rows)
+    source_count=0;passed_count=0
     candidates = []
     excluded = []
     aigc_source_row_count = 0
@@ -188,6 +189,7 @@ def execute_material_query(raw_rows, raw_query, registry):
     seen_material_ids = set()
     material_id_source = registry.require("material_id")["source"]
     for source_row_index, row in enumerate(raw_rows, start=1):
+        source_count+=1
         if not isinstance(row, dict):
             raise MaterialQueryError("material report record must be an object")
         material_id = _text(_value_at(row, material_id_source))
@@ -232,6 +234,12 @@ def execute_material_query(raw_rows, raw_query, registry):
             excluded.append({"materialId": material_id, "reason": "unavailable_sort_value"})
             continue
         candidates.append({"materialId": material_id, "dimensions": dimensions, "metrics": metrics, "sortValue": sort_value})
+        passed_count+=1
+        if bounded:
+            if query.get('sort'):
+                candidates.sort(key=lambda item:(item['sortValue'],item['materialId']),reverse=query['sort']['direction']=='desc')
+            del candidates[query['topN']:]
+
 
     if aigc_source_row_count:
         excluded.append({
@@ -260,9 +268,9 @@ def execute_material_query(raw_rows, raw_query, registry):
         "query": query,
         "sort": query["sort"],
         "candidateCount": len(seen_material_ids),
-        "sourceRecordCount": len(raw_rows),
+        "sourceRecordCount": source_count,
         "skippedSourceRecordCount": skipped_source_record_count,
-        "passedCount": len(candidates),
+        "passedCount": passed_count,
         "returnedCount": len(materials),
         "excluded": excluded,
         "exclusionSummary": {

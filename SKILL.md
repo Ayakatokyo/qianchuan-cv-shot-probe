@@ -48,7 +48,7 @@ python "$SKILL_ROOT/scripts/run.py" verify-export --bundle-dir "$WORKSPACE_ROOT/
 
 export-report只选入报告、源视频（有合法下载收据时）、A/B资源、CV状态/收据/依赖/诊断/配置/镜头/全部代表帧及bundle-manifest，不包含原CSV、账号、请求或签名URL。交付生成的ZIP文件及其SHA；不能只用报告归档器导出report子目录后称为含源视频。以实际下载ZIP文件清单为准，至少检查manifest、report、media和resources；缺项说明交付不完整。失败态报告保留已完成的素材与实测媒体，但不生成成功收据。时长按元数据精度核对：整数秒允许1秒差，小数秒默认0.1秒，宽高/FPS仍严格；比较值/容差写入报告。
 
-## B阶段：复用视频测试分镜（0.3.0）
+## B阶段：复用视频测试分镜（0.4.0）
 
 A的video_ready和成功收据通过后执行。已有运行目录含原视频/CSV即可复用；只有report的历史ZIP不能当B输入，不能因为缺视频自动重提RPA。默认FFmpeg原生方案复用A依赖，不需要安装NumPy/OpenCV/PySceneDetect；在执行A的同一Python环境运行：
 
@@ -68,3 +68,15 @@ python "$SKILL_ROOT/scripts/run.py" verify-export --bundle-dir "$WORKSPACE_ROOT/
 用户要求稳定性测试时，以同一视频/配置显式执行 --attempt-id repeat-1、repeat-2、repeat-3；各次保持独立收据和资源，不重取数。普通重复命令复用已校验成功B，不能把缓存复用算成三次测试。每平台必须返回实际含视频/代表帧/资源的完整ZIP；安装成功、本地通过都不能替代目标沙箱验收。本阶段不调用宿主Agent分析。
 
 需要显式算法对照时，在同环境binary-only安装requirements-cv.txt，再使用preflight --cv --backend adaptive和probe-cv --backend adaptive；默认流程不安装重型CV依赖，也不自动切换算法。真实切点质量需分别核对。
+
+## 0.4.0阶段余量与缓存管理
+
+读取config/memory-policy.json；相对原总占用95%停止线，A选材预留128MiB、详情RPA/下载各32MiB、媒体探测64MiB，B启动预留128MiB，报告导出32MiB。均为技能试验策略，不能提高阈值绕过保护。A返回paused/insufficient_stage_headroom时交付已有状态和phase-memory诊断，停止后续取数；用户明确要求后才resume复用已绑定选择和任务。B余量不足不启动worker；等待环境余量足够后，在用户授权下以新attempt-id重试，不重取A。
+
+完成选材/CSV/视频等阶段后，只对当前运行目录acquisition/media内完成的普通CSV/JSON/视频尝试fsync及POSIX_FADV_DONTNEED，不删除源文件或清全局缓存。建议可能不受支持/被忽略，cache-advice.ndjson记录支持状态、字节数及前后cgroup观察；差值可能含其他进程，不能宣称已释放指定内存。cgroup不可读时额度/余量保持未知；Mac仅提供进程树RSS对照。
+
+报告汇总观测到的rawUsage/工作集估算/cache/anon峰值。memory-admission.json保存B启动判定，guard-samples.ndjson保存约200ms守卫观察，不能用最后一次memory-guard代替全过程峰值。继续保留工作集80%、总占用95%、进程树256MiB和压力事件保护；逐阶段余量不是峰值上限或OOM保证。
+
+千川files报表按原始单列JSON CSV流式校验全部记录并有界选TOP1，不生成两份全量结构化JSON；原CSV作为哈希绑定检查点。仍保留必需指标、重复ID、筛选排序及CSV身份/周期校验。旧report-records.json用流式JSON数组读取兼容；旧文件不自动删除。网关直接返回内联payload时仍兼容全量对象，该路径不宣称已流式化。
+
+恢复选择的快捷路径要求0.4.0 selection-binding.json同时绑定原请求、selection-source和selection.json内容；任何变化停止。旧目录缺此绑定时用流式兼容路径重算原选择并比较，不把未绑定的选择文件直接信任为已验证。

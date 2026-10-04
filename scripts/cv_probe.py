@@ -10,6 +10,7 @@ import sys
 import time
 import uuid
 
+from runtime_memory import policy, release_completed, append_event
 from memory_guard import evaluate_guard, process_tree_rss
 from probe_core import ROOT,ProbeError,Resources,artifact,cgroup_snapshot,digest,fingerprint,read,write,run_lock,safe_file,verify,probe_media,resource_summary,safe_error
 
@@ -105,7 +106,7 @@ def config_value(path=None):
     return config
 
 def implementation_sha():
-    return fingerprint({name:digest(ROOT/'scripts'/name) for name in ('cv_probe.py','cv_worker.py','native_cv_worker.py','memory_guard.py','probe_core.py')})
+    return fingerprint({'policy':policy(),'runtime':{name:digest(ROOT/'scripts'/name) for name in ('cv_probe.py','cv_worker.py','native_cv_worker.py','memory_guard.py','probe_core.py','runtime_memory.py')}})
 
 def verify_cv(root,attempt_id=None):
     acquisition=verify(root)
@@ -137,7 +138,7 @@ def cv_status(root):
     if observed=='running' and not recorded_process_alive(state):observed='interrupted'
     receipt=read(attempt/'receipt.json') if (attempt/'receipt.json').exists() else {}
     data=read(attempt/'shots.json') if (attempt/'shots.json').exists() else {}
-    return {'status':observed,'attemptId':attempt_id,'stage':state.get('stage'),'failureStage':state.get('failureStage'),'errorCode':state.get('errorCode'),'exitCode':receipt.get('workerExitCode'),'signal':receipt.get('signal'),'config':read(attempt/'config.json'),'memoryGuard':receipt.get('memoryGuard'),
+    return {'status':observed,'packageVersion':receipt.get('packageVersion'),'attemptId':attempt_id,'stage':state.get('stage'),'failureStage':state.get('failureStage'),'errorCode':state.get('errorCode'),'exitCode':receipt.get('workerExitCode'),'signal':receipt.get('signal'),'config':read(attempt/'config.json'),'memoryGuard':receipt.get('memoryGuard'),
             'frameCount':data.get('frameCount'),'shotCount':len(data.get('shots',[])),'detectionStatus':data.get('detectionStatus'),'representativeStatus':data.get('representativeStatus'),
             'sourceStartPtsSec':data.get('sourceStartPtsSec'),'durationSec':data.get('durationSec'),'timeMapping':data.get('timeMapping'),'variableFrameIntervalsObserved':data.get('variableFrameIntervalsObserved'),
             'memoryObservation':resource_summary(attempt),'cgroupCounterDelta':receipt.get('cgroupCounterDelta'),'processCleanup':receipt.get('processCleanup'),'terminationDiagnosis':receipt.get('terminationDiagnosis'),'oomAttribution':'Counters belong to the visible shared cgroup; delta alone does not identify this worker.',
@@ -150,7 +151,7 @@ def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
     impl=implementation_sha()
     if attempt_id and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}',attempt_id):raise ProbeError('cv_attempt_id_invalid')
     with run_lock(root):
-        acquisition=verify(root);video=safe_file(root,'media/source-video.mp4');video_sha=digest(video)
+        acquisition=verify(root);video=safe_file(root,'media/source-video.mp4');video_sha=next(a['sha256'] for a in acquisition['artifacts'] if a['path']=='media/source-video.mp4')
         signature=fingerprint({'config':config,'implementationSha256':impl,'videoSha256':video_sha})
         if (root/'cv/latest.json').exists():
             prior_id=read(root/'cv/latest.json')['attemptId'];prior=root/'cv'/prior_id
@@ -172,13 +173,16 @@ def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
         write(root/'cv/latest.json',{'attemptId':attempt_id})
         write(attempt/'config.json',config)
         write(attempt/'status.json',{'status':'running','stage':'cv_precheck','pid':os.getpid(),'attemptId':attempt_id})
+        release_completed(root,'cv_precheck')
         before=cgroup_snapshot();process=None;error=None;cleanup={'status':'not_started'};started=time.monotonic()
         with Resources(attempt):
             try:
-                guard=evaluate_guard(before,config,baseline=before)
+                guard=evaluate_guard(before,config,baseline=before,tree_rss=process_tree_rss(os.getpid()),reserve_mib=policy()['stageReserveMiB']['cv_precheck'])
+                write(attempt/'memory-admission.json',guard)
+                append_event(attempt,'guard-samples.ndjson',guard)
                 write(attempt/'memory-guard.json',guard)
                 if guard['abort']:raise ProbeError('insufficient_headroom')
-                actual_media=probe_media(video)
+                actual_media=acquisition['media'] # A receipt is hash-verified above; avoid repeated decoder startup.
                 job={'attemptDir':str(attempt),'videoPath':str(video),'videoSha256':video_sha,'media':actual_media,'config':config,'implementationSha256':impl}
                 write(attempt/'job.json',job)
                 env=dict(os.environ)
@@ -192,6 +196,7 @@ def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
                     while process.poll() is None:
                         if time.monotonic()-started>config['timeoutSec']:raise ProbeError('cv_timeout')
                         guard=evaluate_guard(cgroup_snapshot(),config,baseline=before,tree_rss=process_tree_rss(os.getpid()))
+                        append_event(attempt,'guard-samples.ndjson',guard)
                         write(attempt/'memory-guard.json',guard)
                         if guard['abort']:raise ProbeError('memory_guard_aborted')
                         time.sleep(.2)
@@ -209,10 +214,11 @@ def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
                 state=read(attempt/'status.json')
                 failed_stage=read(attempt/'worker-failure.json').get('stage') if (attempt/'worker-failure.json').exists() else state.get('stage')
                 state.update(status='failed' if error else 'succeeded',stage='cv_complete',failureStage=failed_stage if error else None,errorCode=error);write(attempt/'status.json',state)
+        release_completed(root,'cv_complete')
         after=cgroup_snapshot();start_counts=oom_counters(before);end_counts=oom_counters(after)
         delta={key:end_counts[key]-value for key,value in start_counts.items() if key in end_counts}
         exit_code=process.returncode if process is not None else None
-        receipt={'status':'failed' if error else 'succeeded','errorCode':error,'inputVideoSha256':video_sha,'bindingSha256':signature,'implementationSha256':impl,'workerExitCode':exit_code,'signal':-exit_code if exit_code is not None and exit_code<0 else None,'elapsedSec':time.monotonic()-started,'cgroupBefore':before,'cgroupAfter':after,'cgroupCounterDelta':delta,'processCleanup':cleanup,'memoryGuard':read(attempt/'memory-guard.json'),'terminationDiagnosis':{'classification':'skill_guard_terminated' if error in ('memory_guard_aborted','insufficient_headroom') else 'skill_timeout_terminated' if error=='cv_timeout' else 'oom_evidence_observed' if any(v>0 for k,v in delta.items() if k.endswith('.oom_kill')) else ('signal_terminated_unknown' if exit_code is not None and exit_code<0 else 'no_signal_observed'),'attribution':'shared_cgroup_evidence_does_not_prove_worker_cause'},
+        receipt={'packageVersion':read(ROOT/'config/platform.json')['version'],'status':'failed' if error else 'succeeded','errorCode':error,'inputVideoSha256':video_sha,'bindingSha256':signature,'implementationSha256':impl,'workerExitCode':exit_code,'signal':-exit_code if exit_code is not None and exit_code<0 else None,'elapsedSec':time.monotonic()-started,'cgroupBefore':before,'cgroupAfter':after,'cgroupCounterDelta':delta,'processCleanup':cleanup,'memoryGuard':read(attempt/'memory-guard.json'),'terminationDiagnosis':{'classification':'skill_guard_terminated' if error in ('memory_guard_aborted','insufficient_headroom') else 'skill_timeout_terminated' if error=='cv_timeout' else 'oom_evidence_observed' if any(v>0 for k,v in delta.items() if k.endswith('.oom_kill')) else ('signal_terminated_unknown' if exit_code is not None and exit_code<0 else 'no_signal_observed'),'attribution':'shared_cgroup_evidence_does_not_prove_worker_cause'},
                  'artifacts':[artifact(p,attempt) for p in sorted(attempt.rglob('*')) if p.is_file()]}
         write(attempt/'receipt.json',receipt)
         if not error:

@@ -137,19 +137,10 @@ class Resources:
             match=re.search(r'^VmRSS:\s+(\d+) kB',fields,re.M)
             if match:rss=int(match[1])*1024
         except OSError:pass
-        tree_rss=None
-        if sys.platform.startswith('linux'):
-            def tree(pid):
-                total=0
-                try:
-                    data=Path(f'/proc/{pid}/status').read_text();match=re.search(r'^VmRSS:\s+(\d+) kB',data,re.M)
-                    if match:total=int(match[1])*1024
-                    children=Path(f'/proc/{pid}/task/{pid}/children').read_text().split()
-                    total+=sum(tree(int(c)) for c in children)
-                except OSError:pass
-                return total
-            tree_rss=tree(os.getpid())
+        from memory_guard import process_tree_rss, evaluate_guard
+        tree_rss=process_tree_rss(os.getpid())
         row={'attemptId':self.attempt,'processTreeSampledRssBytes':tree_rss,'time':time.time(),'stage':status.get('stage'),'pid':os.getpid(),'rssBytes':rss,'processLifetimeHwmBytes':raw if sys.platform=='darwin' else raw*1024,'cgroup':cgroup_snapshot()}
+        row['memoryEstimate']=evaluate_guard(row['cgroup'],read(ROOT/'config/cv-low-memory.json'),tree_rss=tree_rss)
         with (self.root/'resources.ndjson').open('a',encoding='utf-8') as handle:
             handle.write(json.dumps(row)+'\n'); handle.flush()
     def loop(self):
@@ -159,14 +150,14 @@ class Resources:
     def __exit__(self,*args):
         self.stop.set();self.thread.join();self.sample()
 
-def download(url, target, *, max_bytes, session=None, deadline=600):
+def download(url, target, *, max_bytes, session=None, deadline=600, receipt_path=None, receipt_root=None):
     import requests
     parsed=urlsplit(url) if isinstance(url,str) else None
     if not parsed or parsed.scheme not in ('http','https') or not parsed.netloc or parsed.username or parsed.password:
         raise ProbeError('download_url_invalid')
     target=Path(target);target.parent.mkdir(parents=True,exist_ok=True)
     partial=target.with_name('.'+target.name+'.part')
-    response=None; started=time.monotonic(); size=0
+    response=None; started=time.monotonic(); size=0;sha=hashlib.sha256()
     try:
         # Fresh session per artifact: never send gateway cookies to CDN.
         response=(session or requests).get(url,stream=True,timeout=(20,30))
@@ -182,12 +173,14 @@ def download(url, target, *, max_bytes, session=None, deadline=600):
                 if not chunk:continue
                 size+=len(chunk)
                 if size>max_bytes:raise ProbeError('input_limit')
-                handle.write(chunk)
+                handle.write(chunk);sha.update(chunk)
         if size==0:raise ProbeError('download_empty')
         # Reject common error pages before any CSV/media parsing.
         with partial.open('rb') as handle: prefix=handle.read(512).lstrip().lower()
         if prefix.startswith((b'<!doctype html',b'<html')):raise ProbeError('download_error_page')
         os.replace(partial,target)
+        if receipt_path is not None:
+            write(receipt_path,{'path':target.relative_to(receipt_root).as_posix(),'sizeBytes':size,'sha256':sha.hexdigest()})
     except requests.RequestException as exc:
         raise ProbeError('download_failed') from exc
     finally:
@@ -305,6 +298,14 @@ def verify(root):
 
 def resource_summary(root):
     first=last=None;count=0;peaks={};active=0.0
+    def observe(measured):
+        for key in ('rawUsageBytes','workingSetEstimateBytes'):
+            value=measured.get(key)
+            if isinstance(value,(float,int)):peaks[key]=max(peaks.get(key,0),value)
+        stats=measured.get('memoryStat',{})
+        for name,aliases in {'cacheBytes':('file','total_cache','cache'),'anonBytes':('anon','total_rss','rss'),'inactiveFileBytes':('total_inactive_file','inactive_file')}.items():
+            value=next((stats[k] for k in aliases if k in stats),None)
+            if isinstance(value,int):peaks[name]=max(peaks.get(name,0),value)
     path=root/'resources.ndjson'
     if path.exists():
         with path.open(encoding='utf-8') as handle:
@@ -316,13 +317,27 @@ def resource_summary(root):
                     gap=row['time']-last['time']
                     if 0<=gap<=2.5:active+=gap
                 last=row;count+=1
+                measured=row.get('memoryEstimate')
+                if measured is None:
+                    from memory_guard import evaluate_guard
+                    measured=evaluate_guard(row.get('cgroup',{}),read(ROOT/'config/cv-low-memory.json'))
+                observe(measured)
                 for key in ('processTreeSampledRssBytes','processLifetimeHwmBytes'):
                     value=row.get(key)
                     if isinstance(value,(float,int)):peaks[key]=max(peaks.get(key,0),value)
+    guard_path=root/'guard-samples.ndjson'
+    if guard_path.exists():
+        with guard_path.open() as handle:
+            for line in handle:
+                try:g=json.loads(line)
+                except ValueError:continue
+                observe(g)
+                value=g.get('processTreeRssBytes')
+                if isinstance(value,int):peaks['processTreeSampledRssBytes']=max(peaks.get('processTreeSampledRssBytes',0),value)
     return {'activeSampledSec':active,'sampleCount':count,'elapsedObservedSec':last['time']-first['time'] if count else None,
             'peaks':peaks,'firstCgroup':first.get('cgroup') if first else None,
             'lastCgroup':last.get('cgroup') if last else None,
-            'limits':'每秒采样可能漏掉短峰值；HWM是进程生命周期值；cgroup峰值和事件可能含本组其他进程。不可读时额度与余量未知。'}
+            'limits':'A每秒、B守卫约200ms采样仍可能漏掉短峰值；RSS求和可能重复共享页；HWM是进程生命周期值；cgroup峰值和事件可能含本组其他进程。不可读时额度与余量未知。'}
 
 def dependency_versions():
     result={}
@@ -366,7 +381,10 @@ def report(root):
     video=root/'media/source-video.mp4';video_ref=None
     if video.exists() and (root/'media/download-receipt.json').exists():
         candidate=read(root/'media/download-receipt.json')
-        if artifact(video,root)==candidate:video_ref=candidate
+        if state.get('status')=='video_ready':
+            confirmed=next(a for a in receipt['artifacts'] if a['path']=='media/source-video.mp4')
+            if candidate==confirmed:video_ref=candidate
+        elif artifact(video,root)==candidate:video_ref=candidate
     media=receipt.get('media') if receipt else (observed.get('media') if video_ref and observed.get('videoSha256')==video_ref['sha256'] else None)
     public={'stage':'A_acquisition','status':state['status'],'failureStage':state.get('stage') if state['status']=='failed' else None,
             'errorCode':state.get('errorCode'),'platform':read(ROOT/'config/platform.json')['platform'],
@@ -376,6 +394,9 @@ def report(root):
             'videoPath':'../media/source-video.mp4' if video_ref else None,
             'videoArtifact':video_ref,'materialId':receipt.get('materialId') if receipt else (selection.get('material',{}).get('materialId') or selection.get('material',{}).get('material_id')),
             'acquisitionVerified':bool(receipt and state['status']=='video_ready')}
+    public['memoryPolicy']=read(ROOT/'config/memory-policy.json')
+    public['phaseMemory']=read(root/'phase-memory.json') if (root/'phase-memory.json').exists() else None
+    public['cacheAdvicePath']='../cache-advice.ndjson' if (root/'cache-advice.ndjson').exists() else None
     public['runtime']=read(root/'environment.json') if (root/'environment.json').exists() else None
     tasks=read(root/'acquisition/tasks.json') if (root/'acquisition/tasks.json').exists() else {}
     public['tasks']=[{'phase':phase,**{k:task.get(k) for k in ('connectorCode','taskId','status')}} for phase,task in tasks.items()]
@@ -420,21 +441,33 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
             write(root/'request.json',normalized)
             write(root/'environment.json',{'python':sys.version,'platform':sys.platform,'dependencies':dependency_versions(),'stage':'A','packageVersion':read(ROOT/'config/platform.json').get('version'),'cgroup':cgroup_snapshot(),'runtimeFilesSha256':fingerprint({p.name:digest(p) for p in (ROOT/'scripts').glob('*.py')})})
         transition(root,'starting',errorCode=None)
+        from runtime_memory import check_stage, release_completed
         with Resources(root) as resources:
+            gateway=None
             try:
                 gateway=gateway_factory(root)
                 transition(root,'selection')
+                check_stage(root,'selection')
                 if (root/'acquisition/selection-source.json').exists():
                     ref=read(root/'acquisition/selection-source.json')
                     if digest(safe_file(root,ref['path']))!=ref['sha256']:raise ProbeError('selection_source_changed')
-                material,params=adapter.select(normalized,root,gateway)
+                binding=root/'acquisition/selection-binding.json'
+                if binding.exists():
+                    confirmed=read(binding)
+                    if confirmed.get('requestSha256')!=digest(root/'request.json') or confirmed.get('source')!=read(root/'acquisition/selection-source.json') or confirmed.get('selection')!=artifact(root/'acquisition/selection.json',root):
+                        raise ProbeError('selected_sample_changed')
+                    saved=read(root/'acquisition/selection.json');material,params=saved['material'],saved['params']
+                else:material,params=adapter.select(normalized,root,gateway)
                 selected={'material':material,'params':params}
                 saved_selection=root/'acquisition/selection.json'
                 if saved_selection.exists() and fingerprint(read(saved_selection))!=fingerprint(selected):
                     raise ProbeError('selected_sample_changed')
                 # Bind the selected sample before submitting any detail task.
                 write(root/'acquisition/selection.json',{'material':material,'params':params})
+                write(binding,{'requestSha256':digest(root/'request.json'),'source':read(root/'acquisition/selection-source.json'),'selection':artifact(root/'acquisition/selection.json',root)})
                 transition(root,'detail_rpa',firstBatchCsvGate={'status':'unconfirmed'})
+                release_completed(root,'selection_complete')
+                check_stage(root,'detail_rpa')
                 csv_path=gateway.csv('detail',adapter.DETAIL_CODE,params,normalized['rpa_shop'])
                 transition(root,'detail_csv_validation')
                 accepted=root/'acquisition/csv-receipt.json'
@@ -451,35 +484,46 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                 write(accepted,artifact(csv_path,root))
                 write(root/'acquisition/source.json',evidence)
                 transition(root,'video_download',firstBatchCsvGate={'status':'passed'})
+                release_completed(root,'csv_complete')
+                check_stage(root,'video_download')
                 video=root/'media/source-video.mp4'
                 if video.exists():
                     prior=read(root/'media/download-receipt.json')
                     if digest(video)!=prior['sha256']:raise ProbeError('artifact_changed')
                 else:
-                    download(evidence['url'],video,max_bytes=VIDEO_LIMIT)
-                    write(root/'media/download-receipt.json',artifact(video,root))
+                    download(evidence['url'],video,max_bytes=VIDEO_LIMIT,receipt_path=root/'media/download-receipt.json',receipt_root=root)
                 transition(root,'media_probe')
+                release_completed(root,'video_download_complete')
+                check_stage(root,'media_probe')
                 media=media_probe(video)
                 validation=compare_media(evidence.get('expectedMedia',{}),media)
-                write(root/'media/probe.json',{'videoSha256':digest(video),'media':media,'validation':validation})
+                write(root/'media/probe.json',{'videoSha256':read(root/'media/download-receipt.json')['sha256'],'media':media,'validation':validation})
                 if validation['status']!='matched':raise ProbeError('video_identity_mismatch')
                 artifacts=[artifact(p,root) for p in sorted((root/'acquisition').glob('*.csv'))]+[artifact(root/'acquisition/selection-source.json',root)]
                 source_ref=read(root/'acquisition/selection-source.json');artifacts.append(artifact(safe_file(root,source_ref['path']),root))
-                artifacts+=[artifact(root/'acquisition/selection.json',root),artifact(root/'acquisition/source.json',root),artifact(accepted,root),artifact(video,root),artifact(root/'media/download-receipt.json',root),artifact(root/'media/probe.json',root)]
+                artifacts+=[artifact(root/'acquisition/selection.json',root),artifact(root/'acquisition/source.json',root),artifact(accepted,root),read(root/'media/download-receipt.json'),artifact(root/'media/download-receipt.json',root),artifact(root/'media/probe.json',root)]
+                artifacts.append(artifact(binding,root))
                 artifacts=list({item['path']:item for item in artifacts}.values())
                 write(root/'acquisition/receipt.json',{'status':'video_ready','materialId':evidence['materialId'],'media':media,'requestSha256':digest(root/'request.json'),'artifacts':artifacts})
                 transition(root,'acquisition','video_ready')
+                release_completed(root,'acquisition_complete')
             except Exception as exc:
                 state=read(root/'status.json');code=getattr(exc,'code','acquisition_failed')
                 write(root/'failure.json',{'stage':state['stage'],'errorCode':code,'exceptionType':type(exc).__name__,'message':safe_error(exc)})
                 # No valid CSV is a circuit breaker; download/probe failures are separate.
                 if state['stage']=='detail_rpa' and code in ('csv_unavailable','csv_artifact_ambiguous','csv_file_url_ambiguous','download_empty','download_error_page'):
                     transition(root,state['stage'],'failed',errorCode='first_batch_no_valid_csv',firstBatchCsvGate={'status':'blocked'})
-                else:transition(root,state['stage'],'failed',errorCode=code)
+                else:transition(root,state['stage'],'paused' if code=='insufficient_stage_headroom' else 'failed',errorCode=code)
                 resources.sample()
                 report(root)
                 raise
-        return report(root)
+            finally:
+                session=getattr(gateway,'session',None)
+                if session is not None and hasattr(session,'close'):session.close()
+                release_completed(root,'acquisition_exit')
+        result=report(root)
+        release_completed(root,'report_complete')
+        return result
 
 def main(argv=None):
     import argparse
