@@ -6,7 +6,7 @@ requires:
   env:
   - ENV_BACKEND_HOST
   - YUCE_AUTHORIZATION
-pre_input: '请执行千川视频CV分镜沙箱样本A+B阶段。
+pre_input: '请按千川视频CV分镜技能的当前流程执行；默认新取数为单视频A+B。
 
   千川授权店铺：__field:api_shop__
 
@@ -18,7 +18,7 @@ pre_input: '请执行千川视频CV分镜沙箱样本A+B阶段。
 
   筛选与排序条件：__field:material_filter_sort__
 
-  仅获取1条视频，完成CSV与媒体校验，再以FFmpeg原生低内存方案检测镜头与代表帧，交付完整技术报告。'
+  新取数时仅获取1条视频，完成CSV与媒体校验，再以FFmpeg原生低内存方案检测镜头与代表帧，交付完整技术报告ZIP和独立导出内存证据ZIP。若用户明确要求复用已有视频或进行串行验收，先使用用户指定或当前对话中已核验的完整A运行目录，按已有输入串行流程逐条执行，不重新取数或下载；缺少有效目录时说明缺口并停止。每条完成并清理后再处理下一条，失败或内存不足即停止并交付诊断，不自动重试或提高停止阈值。'
 skill_form:
 - key: api_shop
   type: api_shop

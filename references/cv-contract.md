@@ -1,4 +1,4 @@
-# 分镜与内存契约（0.4.0）
+# 分镜与内存契约（0.4.1）
 
 B复用A成功收据绑定的视频，先验证原CSV/视频SHA；不重提API/RPA或重新下载。成功缓存绑定实现/视频/配置/backend；显式新attempt-id用于重复测试，保留旧状态/收据。
 
@@ -39,3 +39,13 @@ B验证A收据后复用已校验媒体参数；下载时流式计算SHA生成下
 对当前运行目录acquisition/media内完成的普通文件执行fsync和POSIX_FADV_DONTNEED建议。Linux支持不等于一定回收；Mac不支持则记录supported=false，失败记录errno，不修改系统缓存/额度、不删除文件。cache-advice的前后cgroup差值不归因单一文件或技能。报告完整包新增phase-memory、cache-advice、memory-admission和guard-samples诊断；不包含原CSV/账号/签名URL。临时导出副本的缓存回收尚未覆盖，导出32MiB仅为试验准入预算。
 
 0.4.0本机回归不能代替目标Linux1GiB沙箱验收；下一步测两平台A+B三次、缓存建议效果、峰值与人工镜头质量。宿主音频转写、脚本对齐与二次分析后置。
+
+## 0.4.1当前契约
+
+0.4.0只记录missingReclaimDeductionFields但仍默认缺值为0的问题已修正：只有inactive_file、file/cache及同层级全部shmem/dirty/writeback字段可读时才抵扣；否则inactiveFileCreditBytes=0、guardBasis=raw_usage_fallback。v1 total统计不混用local扣减字段。阈值/余量保持不变，缺失字段的高raw基线会比旧版本更早被保护阻断。
+
+导出独立`.memory`目录约200ms采样和守卫锁存，覆盖render/copy/hash/verify/ZIP/cache advice/publish；1MiB复制/ZIP块和阶段边界合作停止，短峰值仍可能漏采。调用只建议回收本次显式普通副本（含JPEG）与已关闭、CRC/清单/SHA核验后的ZIP，fsync+DONTNEED失败记录errno，保留交付文件、不扫描父目录/跟随内部软链接/清全局缓存。导出后独立`.memory.zip`含resources.ndjson、guard-samples.ndjson、memory-guard.json、cache-advice.ndjson、status.json、receipt.json。receipt绑定报告ZIP SHA、观察峰值、raw基线和各证据文件SHA；证据ZIP自身的组装不在监测范围。outputPublished保留发布后最终采样失败的实际状态，失败不能称成功。
+
+probe-cv-batch --manifest-file --output-dir为已有A输入串行入口。清单严格schemaVersion/runs、每条只有绝对runDir，清单≤64KiB、1–10项，纯本地平台/请求契约预检。输出新目录且不与输入重叠。每条调用原probe-cv（显式新attempt/native）与verify-cv、等待进程组清理，再export-report；concurrency=1，不取数/重下视频，不读全部帧到内存。batch.json逐条落盘，首败停队列，余项pending；无自动恢复。整队列独立资源/守卫包含两条间隔与导出，避免只看B峰值。distinctVideoCount统计实际执行收据的视频哈希，重复一个素材不等于多素材证据。A的单条样本门禁、账号/周期/身份/恢复绑定保持；正式在线批量取数未实现。
+
+串行队列导出在运行锁内核对expected attempt；期间latest被其他已完成任务替换则delivery_cv_attempt_changed停止，不能将另一attempt的报告混入当前条收据。failcnt表示触限计数，不等于OOM次数；PSI字段缺失时压力未知。

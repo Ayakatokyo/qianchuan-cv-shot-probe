@@ -54,8 +54,8 @@ def evaluate_guard(snapshot,config,*,baseline=None,tree_rss=None,reserve_mib=0):
     credit=0;basis='raw_usage_fallback'
     deduction_keys=['shmem','file_dirty','file_writeback'] if v2 else [prefix+'shmem',prefix+'dirty',prefix+'writeback']
     result['missingReclaimDeductionFields']=[k for k in deduction_keys if k not in stats]
-    if inactive is not None and cache is not None:
-        deductions=sum(stats.get(k,0) for k in (['shmem','file_dirty','file_writeback'] if v2 else [prefix+'shmem',prefix+'dirty',prefix+'writeback']))
+    if inactive is not None and cache is not None and not result['missingReclaimDeductionFields']:
+        deductions=sum(stats[k] for k in deduction_keys)
         credit=max(0,min(inactive,cache,used)-deductions);basis='usage_minus_conservative_inactive_file'
     working=used-credit
     pressure_full=None

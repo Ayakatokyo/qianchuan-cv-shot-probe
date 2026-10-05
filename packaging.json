@@ -118,6 +118,10 @@
     {
       "source": "scripts/record_stream.py",
       "destination": "scripts/record_stream.py"
+    },
+    {
+      "source": "scripts/serial_probe.py",
+      "destination": "scripts/serial_probe.py"
     }
   ]
 }

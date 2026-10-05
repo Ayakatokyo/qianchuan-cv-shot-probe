@@ -1,3 +1,7 @@
+# 当前检查点：0.4.1保守守卫、完整导出观测与已有A串行
+
+缺少同层缓存扣减字段时采用raw占用；导出全过程约200ms守卫、自身生成副本缓存建议与独立内存证据；probe-cv-batch仅串行复用已有A，首败停止。新取数仍为单条。当前执行契约见SKILL.md与references/cv-contract.md，以下0.4.0说明保留原有实现背景。
+
 # 千川视频CV分镜沙箱样本
 
 稳定ID `qianchuan-cv-shot-probe`，当前0.4.0（A+B）。A修复已先提交并推送后才开发B；A门禁、整数时长容差、失败信息与完整导出保留。B默认复用视频执行受监督的FFmpeg原生镜头检测、逐镜头代表帧和技术报告。业务入口见[SKILL.md](SKILL.md)，参数及限制见[CV契约](references/cv-contract.md)。

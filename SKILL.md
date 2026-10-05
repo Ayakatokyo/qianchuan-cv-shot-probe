@@ -48,7 +48,7 @@ python "$SKILL_ROOT/scripts/run.py" verify-export --bundle-dir "$WORKSPACE_ROOT/
 
 export-report只选入报告、源视频（有合法下载收据时）、A/B资源、CV状态/收据/依赖/诊断/配置/镜头/全部代表帧及bundle-manifest，不包含原CSV、账号、请求或签名URL。交付生成的ZIP文件及其SHA；不能只用报告归档器导出report子目录后称为含源视频。以实际下载ZIP文件清单为准，至少检查manifest、report、media和resources；缺项说明交付不完整。失败态报告保留已完成的素材与实测媒体，但不生成成功收据。时长按元数据精度核对：整数秒允许1秒差，小数秒默认0.1秒，宽高/FPS仍严格；比较值/容差写入报告。
 
-## B阶段：复用视频测试分镜（0.4.0）
+## B阶段：复用视频测试分镜（0.4.1）
 
 A的video_ready和成功收据通过后执行。已有运行目录含原视频/CSV即可复用；只有report的历史ZIP不能当B输入，不能因为缺视频自动重提RPA。默认FFmpeg原生方案复用A依赖，不需要安装NumPy/OpenCV/PySceneDetect；在执行A的同一Python环境运行：
 
@@ -80,3 +80,21 @@ python "$SKILL_ROOT/scripts/run.py" verify-export --bundle-dir "$WORKSPACE_ROOT/
 千川files报表按原始单列JSON CSV流式校验全部记录并有界选TOP1，不生成两份全量结构化JSON；原CSV作为哈希绑定检查点。仍保留必需指标、重复ID、筛选排序及CSV身份/周期校验。旧report-records.json用流式JSON数组读取兼容；旧文件不自动删除。网关直接返回内联payload时仍兼容全量对象，该路径不宣称已流式化。
 
 恢复选择的快捷路径要求0.4.0 selection-binding.json同时绑定原请求、selection-source和selection.json内容；任何变化停止。旧目录缺此绑定时用流式兼容路径重算原选择并比较，不把未绑定的选择文件直接信任为已验证。
+
+## 0.4.1保守守卫、导出证据与串行验收
+
+任一同口径shmem/dirty/writeback字段缺失时，不抵扣inactive_file，工作集按raw判断；缺失字段保留在诊断。不改80%工作集/95%原始占用/256MiB进程树或阶段余量；高基线阻断先交付诊断，不调线强行执行。
+
+export-report新增本次生成的副本/JPEG/ZIP缓存建议及全程约200ms采样；复制和ZIP以1MiB块检查，阶段间也检查，守卫停止即中止后续发布。缓存建议只作用本次显式文件，原报告/媒体保留。返回完整报告ZIP和memoryEvidenceZip（`.memory.zip`）：后者包含独立resources、guard-samples、cache-advice、status及receipt，绑定报告ZIP SHA。报告ZIP内A资源/缓存记录仍是其原阶段快照，导出全过程以独立memory证据为准；证据ZIP自身打包不在监测覆盖内。失败也保留`.memory`和证据ZIP，查看outputPublished区分发布前失败和发布后末次观测失败。
+
+只有用户要求串行验收/处理已有输入时使用probe-cv-batch。在工作对象目录保存清单，使用已存在且完整的A目录绝对路径；禁止从报告ZIP伪造A或为了填队列重提取数。数量1–10，重复同目录用于稳定性，多个不同目录用于已有素材批量。例：
+
+```json
+{"schemaVersion":1,"runs":[{"runDir":"/绝对路径/原A目录"},{"runDir":"/绝对路径/原A目录"},{"runDir":"/绝对路径/原A目录"}]}
+```
+
+```bash
+python "$SKILL_ROOT/scripts/run.py" probe-cv-batch --manifest-file "$WORKSPACE_ROOT/serial-inputs.json" --output-dir "$WORKSPACE_ROOT/串行CV验收-唯一标识"
+```
+
+固定ffmpeg-scene、并发1，每条强制新attempt并等待worker清理完成、报告导出结束；同沙箱千川/云图不得同时跑两条队列。首次失败立即停止，batch.json保存已完成和pending，不自动重试/恢复。返回独立B收据、每条报告与memory ZIP、整队列resources/guard-samples和batch.json。已完成结果可保留；修复阻断后仅在用户授权下用新目录显式列出待执行输入。distinctVideoCount=1只能证明同视频重复，不能称多素材验收。当前没有榜单一次取数的正式批量详情/下载入口，没有ASR或宿主AI分析；离线合成通过不替代真实1GiB多素材/质量验收。

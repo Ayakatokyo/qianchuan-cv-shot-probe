@@ -126,8 +126,8 @@ def cgroup_snapshot():
     return {'status':'unavailable'}
 
 class Resources:
-    def __init__(self, root):
-        self.root=root; self.stop=threading.Event(); self.thread=None; self.attempt=uuid.uuid4().hex
+    def __init__(self, root, interval=1):
+        self.interval=interval; self.root=root; self.stop=threading.Event(); self.thread=None; self.attempt=uuid.uuid4().hex
     def sample(self):
         status=read(self.root/'status.json')
         raw=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -143,8 +143,9 @@ class Resources:
         row['memoryEstimate']=evaluate_guard(row['cgroup'],read(ROOT/'config/cv-low-memory.json'),tree_rss=tree_rss)
         with (self.root/'resources.ndjson').open('a',encoding='utf-8') as handle:
             handle.write(json.dumps(row)+'\n'); handle.flush()
+        return row
     def loop(self):
-        while not self.stop.wait(1): self.sample()
+        while not self.stop.wait(self.interval): self.sample()
     def __enter__(self):
         self.sample(); self.thread=threading.Thread(target=self.loop,daemon=True); self.thread.start();return self
     def __exit__(self,*args):
@@ -337,7 +338,7 @@ def resource_summary(root):
     return {'activeSampledSec':active,'sampleCount':count,'elapsedObservedSec':last['time']-first['time'] if count else None,
             'peaks':peaks,'firstCgroup':first.get('cgroup') if first else None,
             'lastCgroup':last.get('cgroup') if last else None,
-            'limits':'A每秒、B守卫约200ms采样仍可能漏掉短峰值；RSS求和可能重复共享页；HWM是进程生命周期值；cgroup峰值和事件可能含本组其他进程。不可读时额度与余量未知。'}
+            'limits':'A每秒、B及导出/队列守卫约200ms采样仍可能漏掉短峰值；RSS求和可能重复共享页；HWM是进程生命周期值；cgroup峰值和事件可能含本组其他进程。不可读时额度与余量未知。'}
 
 def dependency_versions():
     result={}
@@ -531,6 +532,7 @@ def main(argv=None):
     commands=parser.add_subparsers(dest='command',required=True)
     p=commands.add_parser('preflight');p.add_argument('--cv',action='store_true');p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'],default='ffmpeg-scene')
     p=commands.add_parser('probe-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--profile',choices=['low-memory'],default='low-memory');p.add_argument('--attempt-id');p.add_argument('--config-file',type=Path);p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'])
+    p=commands.add_parser('probe-cv-batch');p.add_argument('--manifest-file',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
     p=commands.add_parser('verify-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--attempt-id')
     p=commands.add_parser('export-report');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
     p=commands.add_parser('verify-export');p.add_argument('--bundle-dir',type=Path,required=True)
@@ -551,6 +553,9 @@ def main(argv=None):
         elif args.command=='probe-cv':
             from cv_probe import probe_cv
             result=probe_cv(external_root(args.run_dir),attempt_id=args.attempt_id,config_file=args.config_file,backend=args.backend)
+        elif args.command=='probe-cv-batch':
+            from serial_probe import probe_batch
+            result=probe_batch(args.manifest_file,args.output_dir)
         elif args.command=='verify-cv':
             from cv_probe import verify_cv
             receipt=verify_cv(external_root(args.run_dir),args.attempt_id);result={'status':'verified','cvStatus':receipt['status']}
