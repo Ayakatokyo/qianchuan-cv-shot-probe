@@ -26,6 +26,7 @@ def verify_export(root):
         if artifact(path,root)!=item:raise ProbeError('delivery_artifact_changed')
     html_path=root/'report/index.html'
     for target in re.findall(r'(?:src|href)=["\']([^"\']+)',html_path.read_text()):
+        if target.startswith('data:image/jpeg;base64,'):continue
         if target.startswith(('http:','https:','data:')):raise ProbeError('delivery_remote_resource')
         target_path=(html_path.parent/target).resolve()
         if not target_path.is_relative_to(root.resolve()) or target_path.relative_to(root.resolve()).as_posix() not in paths:raise ProbeError('delivery_resource_missing')

@@ -122,6 +122,14 @@
     {
       "source": "scripts/serial_probe.py",
       "destination": "scripts/serial_probe.py"
+    },
+    {
+      "source": "scripts/batch_acquisition.py",
+      "destination": "scripts/batch_acquisition.py"
+    },
+    {
+      "source": "scripts/visual_report.py",
+      "destination": "scripts/visual_report.py"
     }
   ]
 }

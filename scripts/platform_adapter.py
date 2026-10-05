@@ -20,10 +20,11 @@ def validate(raw):
     scope.setdefault('advertiserId','1') # Syntax placeholder only; never submitted.
     registry=load_field_registry(ROOT/'config/asset-field-registry-v1.json')
     spec=resolve_query_spec(spec,registry)
-    if spec['collection']['targetTopN']!=1 or spec['collection']['candidateTopN']!=1:raise ProbeError('sample_requires_one_material')
+    count=spec['collection']['targetTopN']
+    if not 1<=count<=10 or spec['collection']['candidateTopN']!=count:raise ProbeError('batch_count_invalid')
     return {'api_shop':api,'rpa_shop':rpa,'query_spec':spec}
 
-def select(request,root,gateway):
+def select_many(request,root,gateway):
     detail=gateway.detail(DETAIL_CODE); account=gateway.account(detail,request['rpa_shop'])
     advertiser=str(account.get('account') or '')
     if not advertiser.isascii() or not advertiser.isdecimal():raise ProbeError('advertiser_invalid')
@@ -43,7 +44,7 @@ def select(request,root,gateway):
     material=execute_material_query(records,query,registry,bounded=True)['materials']
     if not material:raise ProbeError('selection_empty')
     write(root/'acquisition/selection-source.json',artifact(source,root))
-    return material[0],{'material_id':material[0]['materialId'],'date_type':'CUSTOM','custom_start_date':query['period']['startDate'],'custom_end_date':query['period']['endDate']}
+    return [(m,{'material_id':m['materialId'],'date_type':'CUSTOM','custom_start_date':query['period']['startDate'],'custom_end_date':query['period']['endDate']}) for m in material]
 
 def video_source(csv_path,material,params):
     rows=parse_diagnosis_csv(csv_path);target=str(material['materialId'])
@@ -59,3 +60,9 @@ def video_source(csv_path,material,params):
         if material.get('materialName') and r.get('materialName') and material['materialName']!=r['materialName']:raise ProbeError('csv_name_mismatch')
     if len(urls)!=1:raise ProbeError('video_url_missing_or_conflicting')
     return {'materialId':target,'url':urls.pop(),'csvPath':str(Path(csv_path).name),'recordIndex':infos[0][0]-2,'fieldPath':'videoUrl','identityStatus':'matched','periodStatus':'matched','expectedMedia':{'durationSec':infos[0][1].get('durationSec') or infos[0][1].get('videoDuration')}}
+
+def count(request):return request['query_spec']['collection']['targetTopN']
+
+def select(request,root,gateway):
+    if count(request)!=1:raise ProbeError('use_run_batch')
+    return select_many(request,root,gateway)[0]

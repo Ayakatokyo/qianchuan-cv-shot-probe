@@ -395,6 +395,11 @@ def report(root):
             'videoPath':'../media/source-video.mp4' if video_ref else None,
             'videoArtifact':video_ref,'materialId':receipt.get('materialId') if receipt else (selection.get('material',{}).get('materialId') or selection.get('material',{}).get('material_id')),
             'acquisitionVerified':bool(receipt and state['status']=='video_ready')}
+    material=selection.get('material',{})
+    public['materialName']=material.get('materialName') or material.get('title')
+    request=read(root/'request.json') if (root/'request.json').exists() else {}
+    period=request.get('query_spec',{}).get('period',{})
+    public['periodLabel']=' 至 '.join(str(v) for v in (period.get('startDate') or period.get('start_date'),period.get('endDate') or period.get('end_date')) if v)
     public['memoryPolicy']=read(ROOT/'config/memory-policy.json')
     public['phaseMemory']=read(root/'phase-memory.json') if (root/'phase-memory.json').exists() else None
     public['cacheAdvicePath']='../cache-advice.ndjson' if (root/'cache-advice.ndjson').exists() else None
@@ -408,25 +413,16 @@ def report(root):
         if cv['status']=='succeeded':verify_cv(root)
     target=root/'report';target.mkdir(exist_ok=True)
     write(target/'report.json',public)
-    display={**public,'cv':{k:v for k,v in cv.items() if k!='shots'}}
-    content='<html lang="zh-CN"><meta charset="utf-8"><title>视频与CV沙箱测试</title><style>body{font-family:system-ui;max-width:1100px;margin:24px auto;padding:16px}pre{white-space:pre-wrap;word-break:break-word;background:#f5f5f5;padding:16px}td,th{padding:8px;border-bottom:1px solid #ddd;text-align:left}img{max-width:120px}button{cursor:pointer}</style><body><h1>视频与CV沙箱测试</h1><p>阶段：'+html.escape(public['stage'])+'；CV状态：'+html.escape(cv['status'])+'。资源可运行性与人工切分质量分别验收。</p><pre>'+html.escape(json.dumps(display,ensure_ascii=False,indent=2))+'</pre>'
-    if video_ref:content+='<video controls style="max-width:360px" src="../media/source-video.mp4"></video>'
-    if cv.get('shots'):
-        content+='<h2>镜头与代表帧</h2><table><thead><tr><th>镜头</th><th>时间区间（秒）</th><th>代表帧</th><th>状态</th></tr></thead><tbody>'
-        for shot in cv['shots']:
-            frame='../cv/'+cv['attemptId']+'/'+shot['frameRef']
-            image='<img loading="lazy" src="'+html.escape(frame,quote=True)+'">' if shot['representativeStatus']=='available' else '代表帧缺失'
-            content+='<tr><td>'+html.escape(shot['shotId'])+'</td><td><button data-start="'+str(shot['startSec'])+'">'+f"{shot['startSec']:.3f}–{shot['endSec']:.3f}"+'</button></td><td>'+image+'</td><td>'+html.escape(shot['representativeStatus'])+'</td></tr>'
-        content+='</tbody></table><script>document.querySelectorAll("button[data-start]").forEach(b=>b.onclick=()=>{const v=document.querySelector("video");if(v){v.currentTime=Number(b.dataset.start);v.play();}});</script>'
-    content+='</body></html>'
-    (target/'index.html').write_text(content,encoding='utf-8')
+    from visual_report import write_visual
+    write_visual(target/'index.html',[(public,root/'cv'/cv['attemptId'] if cv.get('attemptId') else None)])
     write(target/'receipt.json',{'artifacts':[artifact(target/'index.html',root),artifact(target/'report.json',root)]})
     return {'status':public['status'],'reportPath':str(target/'index.html'),'cvStatus':cv['status']}
 
-def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,media_probe=probe_media):
+def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,media_probe=probe_media,selection_seed=None):
     adapter=adapter or __import__('platform_adapter')
     root=external_root(root)
     normalized=adapter.validate(request)
+    if not resume and selection_seed is None and adapter.count(normalized)!=1:raise ProbeError('use_run_batch')
     if resume:
         if not root.is_dir():raise ProbeError('run_missing')
     else:
@@ -457,7 +453,19 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                     confirmed=read(binding)
                     if confirmed.get('requestSha256')!=digest(root/'request.json') or confirmed.get('source')!=read(root/'acquisition/selection-source.json') or confirmed.get('selection')!=artifact(root/'acquisition/selection.json',root):
                         raise ProbeError('selected_sample_changed')
+                    if confirmed.get('batchSelection') and confirmed['batchSelection']!=artifact(root/'acquisition/batch-selection.json',root):raise ProbeError('selected_sample_changed')
                     saved=read(root/'acquisition/selection.json');material,params=saved['material'],saved['params']
+                elif selection_seed is not None:
+                    # Internal batch seed only: immutable source link + per-item queue binding.
+                    source=Path(selection_seed['sourcePath'])
+                    if source.is_symlink() or artifact(source,source.parent)!=selection_seed['sourceArtifact']:raise ProbeError('selection_source_changed')
+                    destination=root/'acquisition'/('batch-source'+source.suffix)
+                    destination.parent.mkdir(parents=True,exist_ok=True)
+                    os.link(source,destination,follow_symlinks=False) # Shared inode, no full report copy per item.
+                    if artifact(destination,destination.parent)!={**selection_seed['sourceArtifact'],'path':destination.name}:raise ProbeError('selection_source_changed')
+                    write(root/'acquisition/selection-source.json',artifact(destination,root))
+                    write(root/'acquisition/batch-selection.json',selection_seed['binding'])
+                    material,params=selection_seed['material'],selection_seed['params']
                 else:material,params=adapter.select(normalized,root,gateway)
                 selected={'material':material,'params':params}
                 saved_selection=root/'acquisition/selection.json'
@@ -465,7 +473,7 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                     raise ProbeError('selected_sample_changed')
                 # Bind the selected sample before submitting any detail task.
                 write(root/'acquisition/selection.json',{'material':material,'params':params})
-                write(binding,{'requestSha256':digest(root/'request.json'),'source':read(root/'acquisition/selection-source.json'),'selection':artifact(root/'acquisition/selection.json',root)})
+                write(binding,{'requestSha256':digest(root/'request.json'),'source':read(root/'acquisition/selection-source.json'),'selection':artifact(root/'acquisition/selection.json',root),**({'batchSelection':artifact(root/'acquisition/batch-selection.json',root)} if (root/'acquisition/batch-selection.json').exists() else {})})
                 transition(root,'detail_rpa',firstBatchCsvGate={'status':'unconfirmed'})
                 release_completed(root,'selection_complete')
                 check_stage(root,'detail_rpa')
@@ -504,6 +512,7 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                 source_ref=read(root/'acquisition/selection-source.json');artifacts.append(artifact(safe_file(root,source_ref['path']),root))
                 artifacts+=[artifact(root/'acquisition/selection.json',root),artifact(root/'acquisition/source.json',root),artifact(accepted,root),read(root/'media/download-receipt.json'),artifact(root/'media/download-receipt.json',root),artifact(root/'media/probe.json',root)]
                 artifacts.append(artifact(binding,root))
+                if (root/'acquisition/batch-selection.json').exists():artifacts.append(artifact(root/'acquisition/batch-selection.json',root))
                 artifacts=list({item['path']:item for item in artifacts}.values())
                 write(root/'acquisition/receipt.json',{'status':'video_ready','materialId':evidence['materialId'],'media':media,'requestSha256':digest(root/'request.json'),'artifacts':artifacts})
                 transition(root,'acquisition','video_ready')
@@ -528,11 +537,13 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
 
 def main(argv=None):
     import argparse
-    parser=argparse.ArgumentParser(description='A获取一条视频，B离线CV切分与资源测试；无ASR/模型调用')
+    parser=argparse.ArgumentParser(description='一次榜单串行1–10条A+B与可视化HTML；无ASR/模型调用')
     commands=parser.add_subparsers(dest='command',required=True)
     p=commands.add_parser('preflight');p.add_argument('--cv',action='store_true');p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'],default='ffmpeg-scene')
     p=commands.add_parser('probe-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--profile',choices=['low-memory'],default='low-memory');p.add_argument('--attempt-id');p.add_argument('--config-file',type=Path);p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'])
-    p=commands.add_parser('probe-cv-batch');p.add_argument('--manifest-file',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
+    p=commands.add_parser('run-batch');p.add_argument('--request-file',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
+    p=commands.add_parser('export-html');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--output-file',type=Path,required=True)
+    p=commands.add_parser('probe-cv-batch');p.add_argument('--manifest-file',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True);p.add_argument('--delivery',choices=['html','audit'],default='html')
     p=commands.add_parser('verify-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--attempt-id')
     p=commands.add_parser('export-report');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
     p=commands.add_parser('verify-export');p.add_argument('--bundle-dir',type=Path,required=True)
@@ -553,9 +564,15 @@ def main(argv=None):
         elif args.command=='probe-cv':
             from cv_probe import probe_cv
             result=probe_cv(external_root(args.run_dir),attempt_id=args.attempt_id,config_file=args.config_file,backend=args.backend)
+        elif args.command=='run-batch':
+            from batch_acquisition import run_batch
+            result=run_batch(read(args.request_file),args.output_dir)
+        elif args.command=='export-html':
+            from visual_report import export_html
+            result=export_html(external_root(args.run_dir),external_root(args.output_file))
         elif args.command=='probe-cv-batch':
             from serial_probe import probe_batch
-            result=probe_batch(args.manifest_file,args.output_dir)
+            result=probe_batch(args.manifest_file,args.output_dir,delivery_mode=args.delivery)
         elif args.command=='verify-cv':
             from cv_probe import verify_cv
             receipt=verify_cv(external_root(args.run_dir),args.attempt_id);result={'status':'verified','cvStatus':receipt['status']}
@@ -575,7 +592,7 @@ def main(argv=None):
                 state=read(root/'status.json');result={k:state.get(k) for k in ('status','stage','pid','updatedAt','errorCode','firstBatchCsvGate')}
                 from cv_probe import cv_status
                 cv=cv_status(root);result['cv']={k:cv.get(k) for k in ('status','attemptId','stage','errorCode','failureStage','shotCount')}
-                result['nextAction']='export-report' if cv['status']=='succeeded' else ('probe-cv' if state['status']=='video_ready' and cv['status']=='not_run' else 'inspect_saved_state_no_automatic_retry')
+                result['nextAction']='export-html' if cv['status']=='succeeded' else ('probe-cv' if state['status']=='video_ready' and cv['status']=='not_run' else 'inspect_saved_state_no_automatic_retry')
             elif args.command=='verify':
                 receipt=verify(root);result={'status':'verified','materialId':receipt['materialId'],'stage':'A_acquisition'}
             else:result=report(root)

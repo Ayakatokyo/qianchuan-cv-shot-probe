@@ -1,3 +1,7 @@
+# 0.5.0当前批量与轻量报告
+
+run-batch一次选材、1–10条不同素材、串行A+B，保留全部输入门禁、原生worker和进程清理；首败停余项pending，短缺partial，不自动补位/恢复。acquire只做单条A；probe-cv-batch已有A默认一份HTML，--delivery audit才逐条大ZIP。默认export-html无MP4复制/读取或ZIP，已完成报告快照、CV收据输入SHA、镜头及代表帧核验；完整A输入核验留verify/probe-cv。HTML单帧256KiB、总图片12MiB，超限显示对应缺口、所有镜头区间保留；一帧一帧写入，不全量加载图片。中文素材导航/时间轴/大图/画廊参考现有元技能与脚本工作台。约200ms守卫和缓存建议保留在原目录html-exports，不默认再交付ZIP。默认报告不含视频播放，完整媒体留原目录；历史技术ZIP规则仅适用于显式审计。
+
 # 分镜与内存契约（0.4.1）
 
 B复用A成功收据绑定的视频，先验证原CSV/视频SHA；不重提API/RPA或重新下载。成功缓存绑定实现/视频/配置/backend；显式新attempt-id用于重复测试，保留旧状态/收据。
@@ -46,6 +50,6 @@ B验证A收据后复用已校验媒体参数；下载时流式计算SHA生成下
 
 导出独立`.memory`目录约200ms采样和守卫锁存，覆盖render/copy/hash/verify/ZIP/cache advice/publish；1MiB复制/ZIP块和阶段边界合作停止，短峰值仍可能漏采。调用只建议回收本次显式普通副本（含JPEG）与已关闭、CRC/清单/SHA核验后的ZIP，fsync+DONTNEED失败记录errno，保留交付文件、不扫描父目录/跟随内部软链接/清全局缓存。导出后独立`.memory.zip`含resources.ndjson、guard-samples.ndjson、memory-guard.json、cache-advice.ndjson、status.json、receipt.json。receipt绑定报告ZIP SHA、观察峰值、raw基线和各证据文件SHA；证据ZIP自身的组装不在监测范围。outputPublished保留发布后最终采样失败的实际状态，失败不能称成功。
 
-probe-cv-batch --manifest-file --output-dir为已有A输入串行入口。清单严格schemaVersion/runs、每条只有绝对runDir，清单≤64KiB、1–10项，纯本地平台/请求契约预检。输出新目录且不与输入重叠。每条调用原probe-cv（显式新attempt/native）与verify-cv、等待进程组清理，再export-report；concurrency=1，不取数/重下视频，不读全部帧到内存。batch.json逐条落盘，首败停队列，余项pending；无自动恢复。整队列独立资源/守卫包含两条间隔与导出，避免只看B峰值。distinctVideoCount统计实际执行收据的视频哈希，重复一个素材不等于多素材证据。A的单条样本门禁、账号/周期/身份/恢复绑定保持；正式在线批量取数未实现。
+probe-cv-batch --manifest-file --output-dir为已有A输入串行入口。清单严格schemaVersion/runs、每条只有绝对runDir，清单≤64KiB、1–10项，纯本地平台/请求契约预检。输出新目录且不与输入重叠。每条调用原probe-cv（显式新attempt/native）与verify-cv、等待进程组清理，再export-report；concurrency=1，不取数/重下视频，不读全部帧到内存。batch.json逐条落盘，首败停队列，余项pending；无自动恢复。整队列独立资源/守卫包含两条间隔与导出，避免只看B峰值。distinctVideoCount统计实际执行收据的视频哈希，重复一个素材不等于多素材证据。A的单条样本门禁、账号/周期/身份/恢复绑定保持；0.5.0新增run-batch正式一次选材后串行详情/下载，默认HTML，以上当前节为准。
 
 串行队列导出在运行锁内核对expected attempt；期间latest被其他已完成任务替换则delivery_cv_attempt_changed停止，不能将另一attempt的报告混入当前条收据。failcnt表示触限计数，不等于OOM次数；PSI字段缺失时压力未知。

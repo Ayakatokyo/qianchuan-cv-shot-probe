@@ -30,7 +30,7 @@ class SerialExportTests(unittest.TestCase):
         return path
     def test_serial_actual_workers_and_exports_have_complete_independent_evidence(self):
         with patch.object(core.Gateway,'post',side_effect=AssertionError('batch must not acquire')):
-            result=serial_probe.probe_batch(self.manifest(),self.parent/'batch')
+            result=serial_probe.probe_batch(self.manifest(),self.parent/'batch',delivery_mode='audit')
         self.assertEqual(result['status'],'succeeded');self.assertEqual(result['completedCount'],2)
         self.assertEqual(result['distinctVideoCount'],1)
         self.assertNotEqual(*[e['attemptId'] for e in result['entries']])

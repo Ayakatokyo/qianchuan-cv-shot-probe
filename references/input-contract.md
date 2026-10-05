@@ -1,3 +1,9 @@
+# 0.5.0当前输入与交付契约
+
+run-batch接受平台原QuerySpec与授权项，数量1–10；acquire仅数量1，批量拒绝use_run_batch。一次选材队列按已确认排序选择不同ID，数量不足标partial/shortageCount，绝不补位。千川targetTopN=candidateTopN，云图target_top_n≤10且candidate_top_n=1000。每条绑定原请求/共享源SHA/选择与队列SHA，源硬链接不复制报表；任意源变化停止。首条详情CSV必须确认真实、可解析、身份/周期匹配才继续，失败/未知/blocked停止全队列。授权、日期、字段语义沿用以下既有契约。
+
+默认交付内嵌代表帧的单HTML；export-html校验已完成report.json快照收据及CV收据/镜头/帧，不读CSV或MP4，不具备重新验证完整A能力；完整A审计仍用verify，视频输入使用probe-cv时仍全验证。未提供完整A输入不能从HTML恢复B。旧export-report为显式审计大包选项，不能因为默认只有HTML称交付缺视频。旧节中“必须完整ZIP”为历史技术包规则，默认已由本节替代。
+
 # 输入与恢复契约
 
 request.json 包含 query_spec 及所选授权 ID；使用 config/request-example.json 的结构，示例日期需按本次用户输入替换。字段注册表来自本包config，不用另装元技能。
@@ -18,6 +24,6 @@ export-report生成仓外独立目录和同名ZIP，含report、合法下载视�
 
 阶段启动余量不足返回paused/insufficient_stage_headroom，phase-memory.json/ndjson保留判定，已绑定选择/源文件和tasks不清除。resume需明确用户授权，原request、selection-source哈希和首批CSV门禁仍校验；已有selection.json复用，不重新选材。CSV blocked及未知提交仍禁止自动重提。原始数据及历史检查点不因缓存建议被删除；fsync/DONTNEED只为建议，不承诺腾出沙箱容量。新恢复路径仅在已保存选择后复用选材结果；报表下载失败的人工CSV导入尚无正式CLI，继续保留既有私有恢复证据，不自动重提API。
 
-files报表的新规范检查点是原始CSV，流式验证全部必需指标后保存field-manifest和result-parse状态；selection-source绑定原CSV。单条解析记录上限2Mi字符（CSV解析器自身字段限制仍适用），最多输入32MiB。有界TOP1保留全表重复ID/过滤排除计数及排序ID平局语义。旧JSON数组流式兼容，直接内联payload继续兼容而非完整流式响应。
+files报表的新规范检查点是原始CSV，流式验证全部必需指标后保存field-manifest和result-parse状态；selection-source绑定原CSV。单条解析记录上限2Mi字符（CSV解析器自身字段限制仍适用），最多输入32MiB。有界TOPN（1–10）保留全表重复ID/过滤排除计数及排序ID平局语义。旧JSON数组流式兼容，直接内联payload继续兼容而非完整流式响应。
 
 恢复选择的快捷路径要求0.4.0 selection-binding.json同时绑定原请求、selection-source和selection.json内容；任何变化停止。旧目录缺此绑定时用流式兼容路径重算原选择并比较，不把未绑定的选择文件直接信任为已验证。

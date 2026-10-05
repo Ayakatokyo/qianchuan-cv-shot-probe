@@ -1,4 +1,4 @@
-short-description: 千川单视频输入与低内存CV分镜沙箱测试
+short-description: 千川批量视频输入与低内存CV分镜工作台
 tags:
 - 千川
 - 沙箱测试
@@ -6,11 +6,11 @@ requires:
   env:
   - ENV_BACKEND_HOST
   - YUCE_AUTHORIZATION
-pre_input: '请按千川视频CV分镜技能的当前流程执行；默认新取数为单视频A+B。
+pre_input: '请按千川视频CV分镜技能的当前流程执行；按用户要求处理1–10条素材，未指定数量默认1条；一次提问完成串行A+B和可视化报告。
 
   千川授权店铺：__field:api_shop__
 
-  千川广告主ID：__field:rpa_shop__
+  千川RPA授权账号：__field:rpa_shop__
 
   时间范围：__field:date_range__
 
@@ -18,7 +18,7 @@ pre_input: '请按千川视频CV分镜技能的当前流程执行；默认新取
 
   筛选与排序条件：__field:material_filter_sort__
 
-  新取数时仅获取1条视频，完成CSV与媒体校验，再以FFmpeg原生低内存方案检测镜头与代表帧，交付完整技术报告ZIP和独立导出内存证据ZIP。若用户明确要求复用已有视频或进行串行验收，先使用用户指定或当前对话中已核验的完整A运行目录，按已有输入串行流程逐条执行，不重新取数或下载；缺少有效目录时说明缺口并停止。每条完成并清理后再处理下一条，失败或内存不足即停止并交付诊断，不自动重试或提高停止阈值。'
+  详情素材数就是本次要完成CV分镜的素材数量，读取表单top_n并写入collection.targetTopN；用户最新明确数量与表单预填冲突时说明调整并以用户要求为准，不新增批量数量字段。数量1–10，不能把“执行3条”降成1条，超过10条说明单次上限并等待用户选择分批范围。一次新取数使用run-batch：仅获取一次榜单并选出不同素材，然后逐条校验详情CSV、下载、CV和进程清理。不要对同一TOP1重复调用acquire凑数量，不提前导出A技术ZIP。默认交付一份可离线打开的可视化HTML，内嵌代表帧，不复制MP4、不导出大ZIP；仅明确要求审计时导出完整技术包。复用已有输入时用probe-cv-batch，默认仍只交付一份HTML，不重取数或下载；缺少完整A目录时说明缺口并停。筛选后不足指定数量时如实报告缺口，不补位；每条完成清理后再开始下一条，失败或内存不足立即停止，不自动重试或提高停止阈值。'
 skill_form:
 - key: api_shop
   type: api_shop
@@ -29,8 +29,8 @@ skill_form:
   required: true
 - key: rpa_shop
   type: rpa_shop
-  label: 千川广告主ID
-  description: 选择 account 为千川广告主 ID 的 RPA 授权账号；执行前核对该 ID 属于所选 API 店铺，授权项 ID 仅用于逐素材诊断
+  label: 千川RPA授权账号
+  description: 选择与 API 店铺匹配的千川 RPA 授权项；rpa_shop 必须取 extra.shop_id，不能使用 account 广告主 ID；广告主由程序解析核对
   application_id: RPA_JULIANG_QC
   value_format: both
   multiple: false
@@ -47,14 +47,14 @@ skill_form:
 - key: top_n
   type: number
   label: 详情素材数
-  description: 当前样本只获取一条视频，用于后续沙箱CV测试的输入验证
+  description: 该数量同时控制详情取数和CV分镜批量：1–10条、默认1条；每条完成CSV校验、下载和CV后才继续下一条
   required: true
   default: 1
   min: 1
   step: 1
   precision: 0
   addon_after: 条
-  max: 1
+  max: 10
 - key: material_filter_sort
   type: textarea
   label: 筛选与排序条件

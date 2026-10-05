@@ -57,7 +57,7 @@ class DownloadTests(unittest.TestCase):
         for data in ({'records':[{'url':'https://x.test'}]},{'files':[{'fileUrl':'a','url':'b'}]}):
             with self.assertRaises(core.ProbeError):core.file_urls(data)
     def test_offline_intake_limits_and_dates(self):
-        r=request();query=r['query_spec'];query['collection']={'targetTopN':2} if PLATFORM=='qianchuan' else {'target_top_n':2}
+        r=request();query=r['query_spec'];query['collection']={'targetTopN':11} if PLATFORM=='qianchuan' else {'target_top_n':11}
         with self.assertRaises(Exception):adapter.validate(r)
         r=request();period=r['query_spec']['period'];period['endDate' if PLATFORM=='qianchuan' else 'end_date']=TODAY.isoformat()
         with self.assertRaises(Exception):adapter.validate(r)
@@ -93,7 +93,7 @@ class AcquisitionTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
     def setUp(self):
-        self.state={'submits':0,'videoGets':0,'wrongId':False,'missingUrl':False,'noCsv':False}
+        self.state={'submits':0,'videoGets':0,'wrongId':False,'missingUrl':False,'noCsv':False,'materialCount':1,'selectionCalls':0,'detailIds':[]}
         state=self.state;video=self.video
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*a):pass
@@ -107,24 +107,33 @@ class AcquisitionTests(unittest.TestCase):
                 elif self.path.endswith('shops/advertisers'):data=[{'shop_id':'api','advertiser_id':'123'}]
                 elif self.path.endswith('/invoke'):
                     from qianchuan_report_client import DEFAULT_METRICS
-                    data={'result_type':'payload','result_content':[{'dimensions':{'material_id':{'Value':'101'},'roi2_material_video_name':{'ValueStr':'fixture'}},'metrics':{key:{'Value':'10'} for key in DEFAULT_METRICS}}]}
+                    state['selectionCalls']+=1
+                    data={'result_type':'payload','result_content':[{'dimensions':{'material_id':{'Value':str(101+i)},'roi2_material_video_name':{'ValueStr':'fixture'}},'metrics':{key:{'Value':str(10+i)} for key in DEFAULT_METRICS}} for i in range(state['materialCount'])]}
                 elif self.path.endswith('/tasks'):
-                    state['submits']+=1;phase='list' if raw['function_code'].endswith('.list') else 'detail';data={'task_group_id':phase}
+                    state['submits']+=1;phase='list' if raw['function_code'].endswith('.list') else 'detail'
+                    if phase=='list':state['selectionCalls']+=1
+                    else:
+                        mid=raw['business_params']['material_id'];state['detailIds'].append(mid)
+                        if state['materialCount']>1:phase+='-'+mid
+                    data={'task_group_id':phase}
                 elif self.path.endswith('/tasks/status'):
                     data={'status':'completed','result_content':{'records':[{}]} if state['noCsv'] else {'files':[{'fileUrl':f'http://127.0.0.1:{self.server.server_port}/'+raw['task_group_id']+'.csv'}]}}
                 else:raise AssertionError(self.path)
                 self.respond(json.dumps({'success':True,'data':data}).encode())
             def do_GET(self):
                 base=f'http://127.0.0.1:{self.server.server_port}'
-                if self.path=='/list.csv':payload=csv_bytes({'material_id':'101','title':'fixture','object_index':json.dumps({'exposure_cnt':10})})
-                elif self.path=='/detail.csv':
-                    identity='102' if state['wrongId'] else '101';url='' if state['missingUrl'] else base+'/video'
+                if self.path=='/list.csv':
+                    rows=[{'material_id':str(101+i),'title':'fixture','object_index':json.dumps({'exposure_cnt':10})} for i in range(state['materialCount'])]
+                    payload=csv_bytes(rows[0])+b''.join(csv_bytes(row).split(b'\r\n',1)[1] for row in rows[1:])
+                elif self.path.startswith('/detail'):
+                    mid=self.path.removeprefix('/detail-').removesuffix('.csv') if self.path.startswith('/detail-') else '101'
+                    identity='wrong' if state['wrongId'] else mid;url='' if state['missingUrl'] else base+'/video-'+mid
                     if PLATFORM=='qianchuan':payload=csv_bytes({'materialId':identity,'recordType':'material_info','materialName':'fixture','actualStartDate':START,'actualEndDate':END,'videoUrl':url},'\x01')
                     else:payload=csv_bytes({'materialId':identity,'dateType':'CUSTOM','customStartDate':START,'customEndDate':END,'coreData':json.dumps({'objectId':identity,'title':'fixture','videoUrl':url})})
                 else:
                     state['videoGets']+=1
                     assert not self.headers.get('Cookie'),'gateway cookie reached CDN'
-                    payload=video.read_bytes()
+                    payload=state.get('secondVideo') if self.path.endswith('-102') and state.get('secondVideo') else video.read_bytes()
                 self.respond(payload)
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
