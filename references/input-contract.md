@@ -1,6 +1,6 @@
-# 0.5.0当前输入与交付契约
+# 0.5.2当前输入与交付契约
 
-run-batch接受平台原QuerySpec与授权项，数量1–10；acquire仅数量1，批量拒绝use_run_batch。一次选材队列按已确认排序选择不同ID，数量不足标partial/shortageCount，绝不补位。千川targetTopN=candidateTopN，云图target_top_n≤10且candidate_top_n=1000。每条绑定原请求/共享源SHA/选择与队列SHA，源硬链接不复制报表；任意源变化停止。首条详情CSV必须确认真实、可解析、身份/周期匹配才继续，失败/未知/blocked停止全队列。授权、日期、字段语义沿用以下既有契约。
+run-batch接受平台原QuerySpec与授权项，数量1–10；acquire仅数量1，批量拒绝use_run_batch。一次选材队列按已确认排序选择不同ID，数量不足标partial/shortageCount，绝不补位。千川targetTopN=candidateTopN，云图target_top_n≤10且candidate_top_n=1000。每条绑定原请求/共享源SHA/选择与队列SHA，源硬链接不复制报表；任意源变化停止。首条详情CSV必须确认真实、可解析、身份/周期匹配才继续，失败/未知/blocked停止全队列。先串行完成全部选中素材的A详情校验/下载，再按原顺序串行B；A失败不启动CV，B失败保留全部A和已完成B。batch.json区分stage、acquiredCount、completedCount与逐条acquisitionStatus/cvStatus。授权、日期、字段语义沿用以下既有契约。
 
 默认交付内嵌代表帧的单HTML；export-html校验已完成report.json快照收据及CV收据/镜头/帧，不读CSV或MP4，不具备重新验证完整A能力；完整A审计仍用verify，视频输入使用probe-cv时仍全验证。未提供完整A输入不能从HTML恢复B。旧export-report为显式审计大包选项，不能因为默认只有HTML称交付缺视频。旧节中“必须完整ZIP”为历史技术包规则，默认已由本节替代。
 
@@ -12,7 +12,7 @@ request.json 包含 query_spec 及所选授权 ID；使用 config/request-exampl
 
 元技能的完整日期、筛选/排序语义沿用；样本取消高光规则，只准备输入。CLI acquire 涉及授权线上取数，validate/status/verify/render-report为本地操作。未知状态只检查既有task ID；resume是用户明确恢复后的入口，不自动调用。
 
-输出：request/environment/status JSON，acquisition任务/CSV/选材/来源/收据，media原视频与下载收据，resources.ndjson和report完整技术报告。原CSV/签名URL保留私有；报告不显示账号URL或凭证。视频最大128MiB，CSV/报表文件32MiB，时长≤180秒，两边≤1920，帧率≤60。超限终止不换素材。CSV有身份和周期但缺URL归为视频来源缺口，不误报为入参CSV无效。
+输出：request/environment/status JSON，acquisition任务/CSV/选材/来源/收据，media原视频与下载收据，resources.ndjson和report完整技术报告。原CSV/签名URL保留私有；报告不显示账号URL或凭证。视频最大128MiB，CSV/报表文件32MiB，时长≤180秒，长边≤1936且总像素≤3,686,400，帧率≤60。超限终止不换素材。CSV有身份和周期但缺URL归为视频来源缺口，不误报为入参CSV无效。
 
 A阶段资源记录为当前Python进程RSS/生命周期高水位、Linux进程树采样及可见cgroup指标；一秒采样可能遗漏短时峰值，历史memory.peak不代表本次峰值。macOS无Linux cgroup时记录不可用，不伪造容器额度。阶段完成为video_ready，A完成时CV标not_run，B结果独立记录。
 
@@ -27,3 +27,7 @@ export-report生成仓外独立目录和同名ZIP，含report、合法下载视�
 files报表的新规范检查点是原始CSV，流式验证全部必需指标后保存field-manifest和result-parse状态；selection-source绑定原CSV。单条解析记录上限2Mi字符（CSV解析器自身字段限制仍适用），最多输入32MiB。有界TOPN（1–10）保留全表重复ID/过滤排除计数及排序ID平局语义。旧JSON数组流式兼容，直接内联payload继续兼容而非完整流式响应。
 
 恢复选择的快捷路径要求0.4.0 selection-binding.json同时绑定原请求、selection-source和selection.json内容；任何变化停止。旧目录缺此绑定时用流式兼容路径重算原选择并比较，不把未绑定的选择文件直接信任为已验证。
+
+## 0.5.2千川源视频尺寸准入
+
+config/media-input-policy.json：长边≤1936（比1920增加16），总像素≤3,686,400，不扩大原规则隐含的最大面积；保持180秒/60fps/128MiB及所有内存阈值。CV处理仍最大边320，无原视频裁剪/转码。probe.json保存原始宽高/视频SHA与admission（policy、observed、violations、dimensionToleranceUsed），尺寸超限media_input_limit会保存媒体信息与validation=not_run，HTML直接显示实际值/上限；成功A收据绑定原媒体，宽高身份比较保持精确匹配。未新增队列续跑/跳过失败。

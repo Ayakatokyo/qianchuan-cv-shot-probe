@@ -130,6 +130,10 @@
     {
       "source": "scripts/visual_report.py",
       "destination": "scripts/visual_report.py"
+    },
+    {
+      "source": "config/media-input-policy.json",
+      "destination": "config/media-input-policy.json"
     }
   ]
 }

@@ -85,7 +85,7 @@ def write_visual(target, items, summary=None, monitor=None):
                         emit('<img loading="lazy" alt="镜头 '+str(n+1)+' 代表帧，'+seconds(shot['representativeTimeSec'])+' 秒" src="data:image/jpeg;base64,'+base64.b64encode(raw).decode('ascii')+'">')
                     emit('</span><span class="text">镜头 '+str(n+1).zfill(2)+'<small>'+seconds(shot['startSec'])+' – '+seconds(shot['endSec'])+' 秒 · '+seconds(duration)+'s</small></span></button>')
                 emit('</div>')
-            else:emit('<p class="alert">'+esc(public.get('errorCode') or '该素材尚未完成 CV 分镜，不能据此判断镜头质量。')+'</p>')
+            else:emit('<p class="alert">'+esc(public.get('errorMessage') or public.get('errorCode') or '该素材尚未完成 CV 分镜，不能据此判断镜头质量。')+'</p>')
             obs=cv.get('memoryObservation') or public.get('memoryObservation') or {}
             emit('<details class="technical"><summary>查看执行与来源摘要</summary><dl>')
             for key,val in (('执行版本',cv.get('packageVersion') or (public.get('runtime') or {}).get('packageVersion')),('CV attempt',cv.get('attemptId')),('视频 SHA-256',(public.get('videoArtifact') or {}).get('sha256')),('worker 退出码',cv.get('exitCode')),('进程清理',(cv.get('processCleanup') or {}).get('status')),('观测采样数',obs.get('sampleCount')),('原始占用峰值 MiB',round((obs.get('peaks') or {})['rawUsageBytes']/1048576,2) if 'rawUsageBytes' in (obs.get('peaks') or {}) else None),('人工质量验收','待人工核对'),('内容分析','未进行 ASR / 模型分析')):

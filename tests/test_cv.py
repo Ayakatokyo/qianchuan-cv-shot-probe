@@ -59,6 +59,26 @@ class CvTests(unittest.TestCase):
         self.assertEqual(result['status'],'succeeded')
         data=core.read(self.root/'cv/single/shots.json');self.assertEqual(len(data['shots']),1)
         self.assertGreater(data['frameCount'],0)
+
+    def test_real_1080x1922_keeps_original_and_runs_native_cv(self):
+        video=Path(self.helper.root_temp.name)/'1922.mp4'
+        subprocess.run([self.ffmpeg,'-hide_banner','-loglevel','error',
+            '-f','lavfi','-i','color=c=red:s=1080x1922:r=30:d=0.5',
+            '-f','lavfi','-i','color=c=blue:s=1080x1922:r=30:d=0.5',
+            '-filter_complex_threads','1','-filter_complex','[0:v][1:v]concat=n=2:v=1:a=0[v]',
+            '-map','[v]','-an','-c:v','libx264','-preset','ultrafast','-threads','1','-pix_fmt','yuv420p',str(video)],check=True)
+        self.acquire(video)
+        receipt=core.verify(self.root)
+        self.assertEqual((receipt['media']['width'],receipt['media']['height']),(1080,1922))
+        self.assertTrue(core.read(self.root/'media/probe.json')['admission']['dimensionToleranceUsed'])
+        sha=core.digest(self.root/'media/source-video.mp4')
+        result=cv.probe_cv(self.root,attempt_id='source-1922')
+        self.assertEqual(result['status'],'succeeded')
+        cv.verify_cv(self.root)
+        data=core.read(self.root/'cv/source-1922/shots.json')
+        self.assertEqual(data['scaledDimensions'],[180,320]);self.assertEqual(len(data['shots']),2)
+        self.assertEqual(data['frameCount'],30)
+        self.assertEqual(core.digest(self.root/'media/source-video.mp4'),sha)
     def test_vfr_preserves_native_pts_without_cfr_resampling(self):
         self.acquire(self.vfr);result=cv.probe_cv(self.root,attempt_id='vfr')
         self.assertEqual(result['status'],'succeeded',core.read(self.root/'cv/vfr/status.json'))

@@ -35,8 +35,8 @@ def safe_error(exc):
     return re.sub(r'https?://[^\s]+','[redacted URL]',message)[:1000]
 
 class ProbeError(RuntimeError):
-    def __init__(self, code):
-        super().__init__(code)
+    def __init__(self, code, message=None):
+        super().__init__(message or code)
         self.code = code
 
 def read(path):
@@ -265,6 +265,31 @@ class Gateway:
         if not path.exists():download(file_urls(result),path,max_bytes=CSV_LIMIT)
         return path
 
+def media_input_admission(media):
+    policy=read(ROOT/'config/media-input-policy.json')
+    for field,ceiling in (('maxDimension',1936),('maxPixels',1920*1920)):
+        value=policy.get(field)
+        if type(value) is not int or not 0<value<=ceiling:raise ProbeError('media_input_policy_invalid')
+    if policy.get('schemaVersion')!=1:raise ProbeError('media_input_policy_invalid')
+    width,height=media.get('width'),media.get('height')
+    if type(width) is not int or type(height) is not int or min(width,height)<=0:raise ProbeError('media_metadata_invalid')
+    duration,fps=media.get('durationSec'),media.get('fps')
+    if any(type(value) not in (int,float) or not math.isfinite(value) for value in (duration,fps)):raise ProbeError('media_metadata_invalid')
+    checks=[('longEdge',max(width,height),policy['maxDimension']),
+            ('pixelCount',width*height,policy['maxPixels']),('durationSec',duration,180),('fps',fps,60)]
+    violations=[{'field':field,'actual':actual,'maximum':maximum} for field,actual,maximum in checks if not 0<actual<=maximum]
+    return {'status':'rejected' if violations else 'admitted','policy':policy,
+            'observed':{'width':width,'height':height,'pixelCount':width*height,'durationSec':duration,'fps':fps},
+            'dimensionToleranceUsed':not violations and max(width,height)>1920,'violations':violations}
+
+def require_media_input(media,admission):
+    if admission['status']=='admitted':return
+    labels={'longEdge':'长边','pixelCount':'总像素','durationSec':'时长（秒）','fps':'帧率'}
+    detail='；'.join(f"{labels[v['field']]}实际 {v['actual']}，允许范围 (0, {v['maximum']}]" for v in admission['violations'])
+    error=ProbeError('media_input_limit','媒体输入超限：'+detail)
+    error.media=media;error.admission=admission
+    raise error
+
 def probe_media(path):
     import imageio_ffmpeg
     executable=shutil.which('ffprobe')
@@ -284,8 +309,8 @@ def probe_media(path):
         video=re.search(r'Video: ([^,]+).*? (\d+)x(\d+).*?([\d.]+) fps',p.stderr)
         if not duration or not video:raise ProbeError('media_probe_failed')
         info={'durationSec':int(duration[1])*3600+int(duration[2])*60+float(duration[3]),'codec':video[1],'width':int(video[2]),'height':int(video[3]),'fps':float(video[4]),'probeProvider':'ffmpeg_header'}
-    if not 0<info['durationSec']<=180 or not 0<info['fps']<=60 or max(info['width'],info['height'])>1920:raise ProbeError('media_input_limit')
     info['binarySha256']=digest(executable)
+    require_media_input(info,media_input_admission(info))
     return info
 
 def verify(root):
@@ -388,8 +413,9 @@ def report(root):
         elif artifact(video,root)==candidate:video_ref=candidate
     media=receipt.get('media') if receipt else (observed.get('media') if video_ref and observed.get('videoSha256')==video_ref['sha256'] else None)
     public={'stage':'A_acquisition','status':state['status'],'failureStage':state.get('stage') if state['status']=='failed' else None,
-            'errorCode':state.get('errorCode'),'platform':read(ROOT/'config/platform.json')['platform'],
+            'errorCode':state.get('errorCode'),'errorMessage':read(root/'failure.json').get('message') if state['status']=='failed' and (root/'failure.json').exists() else None,'platform':read(ROOT/'config/platform.json')['platform'],
             'cvStatus':'not_implemented','media':media,'mediaValidation':observed.get('validation') if media else None,
+            'mediaAdmission':observed.get('admission') if media else None,
             'firstBatchCsvGate':state.get('firstBatchCsvGate'),
             'memoryObservation':{**resource_summary(root),'samplesPath':'../resources.ndjson'},
             'videoPath':'../media/source-video.mp4' if video_ref else None,
@@ -504,9 +530,16 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                 transition(root,'media_probe')
                 release_completed(root,'video_download_complete')
                 check_stage(root,'media_probe')
-                media=media_probe(video)
+                try:media=media_probe(video)
+                except ProbeError as exc:
+                    if hasattr(exc,'media') and hasattr(exc,'admission'):
+                        write(root/'media/probe.json',{'videoSha256':read(root/'media/download-receipt.json')['sha256'],'media':exc.media,'admission':exc.admission,'validation':{'status':'not_run','reason':'media_input_limit'}})
+                    raise
+                admission=media_input_admission(media)
+                write(root/'media/probe.json',{'videoSha256':read(root/'media/download-receipt.json')['sha256'],'media':media,'admission':admission,'validation':{'status':'not_run'}})
+                require_media_input(media,admission)
                 validation=compare_media(evidence.get('expectedMedia',{}),media)
-                write(root/'media/probe.json',{'videoSha256':read(root/'media/download-receipt.json')['sha256'],'media':media,'validation':validation})
+                write(root/'media/probe.json',{'videoSha256':read(root/'media/download-receipt.json')['sha256'],'media':media,'admission':admission,'validation':validation})
                 if validation['status']!='matched':raise ProbeError('video_identity_mismatch')
                 artifacts=[artifact(p,root) for p in sorted((root/'acquisition').glob('*.csv'))]+[artifact(root/'acquisition/selection-source.json',root)]
                 source_ref=read(root/'acquisition/selection-source.json');artifacts.append(artifact(safe_file(root,source_ref['path']),root))
@@ -537,7 +570,7 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
 
 def main(argv=None):
     import argparse
-    parser=argparse.ArgumentParser(description='一次榜单串行1–10条A+B与可视化HTML；无ASR/模型调用')
+    parser=argparse.ArgumentParser(description='一次榜单1–10条全部A就绪后串行B与可视化HTML；无ASR/模型调用')
     commands=parser.add_subparsers(dest='command',required=True)
     p=commands.add_parser('preflight');p.add_argument('--cv',action='store_true');p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'],default='ffmpeg-scene')
     p=commands.add_parser('probe-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--profile',choices=['low-memory'],default='low-memory');p.add_argument('--attempt-id');p.add_argument('--config-file',type=Path);p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'])

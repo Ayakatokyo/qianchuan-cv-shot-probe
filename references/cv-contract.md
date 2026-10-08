@@ -1,6 +1,6 @@
-# 0.5.0当前批量与轻量报告
+# 0.5.2当前批量与轻量报告
 
-run-batch一次选材、1–10条不同素材、串行A+B，保留全部输入门禁、原生worker和进程清理；首败停余项pending，短缺partial，不自动补位/恢复。acquire只做单条A；probe-cv-batch已有A默认一份HTML，--delivery audit才逐条大ZIP。默认export-html无MP4复制/读取或ZIP，已完成报告快照、CV收据输入SHA、镜头及代表帧核验；完整A输入核验留verify/probe-cv。HTML单帧256KiB、总图片12MiB，超限显示对应缺口、所有镜头区间保留；一帧一帧写入，不全量加载图片。中文素材导航/时间轴/大图/画廊参考现有元技能与脚本工作台。约200ms守卫和缓存建议保留在原目录html-exports，不默认再交付ZIP。默认报告不含视频播放，完整媒体留原目录；历史技术ZIP规则仅适用于显式审计。
+run-batch一次选材、1–10条不同素材、先全部串行A详情校验/下载，再串行B，保留全部输入门禁、原生worker和进程清理；A失败不启动任何B；B失败保留全部A和已完成B，未处理B为pending；短缺partial，不自动补位/恢复。acquire只做单条A；probe-cv-batch已有A默认一份HTML，--delivery audit才逐条大ZIP。默认export-html无MP4复制/读取或ZIP，已完成报告快照、CV收据输入SHA、镜头及代表帧核验；完整A输入核验留verify/probe-cv。HTML单帧256KiB、总图片12MiB，超限显示对应缺口、所有镜头区间保留；一帧一帧写入，不全量加载图片。中文素材导航/时间轴/大图/画廊参考现有元技能与脚本工作台。约200ms守卫和缓存建议保留在原目录html-exports，不默认再交付ZIP。默认报告不含视频播放，完整媒体留原目录；历史技术ZIP规则仅适用于显式审计。
 
 # 分镜与内存契约（0.4.1）
 
@@ -53,3 +53,7 @@ B验证A收据后复用已校验媒体参数；下载时流式计算SHA生成下
 probe-cv-batch --manifest-file --output-dir为已有A输入串行入口。清单严格schemaVersion/runs、每条只有绝对runDir，清单≤64KiB、1–10项，纯本地平台/请求契约预检。输出新目录且不与输入重叠。每条调用原probe-cv（显式新attempt/native）与verify-cv、等待进程组清理，再export-report；concurrency=1，不取数/重下视频，不读全部帧到内存。batch.json逐条落盘，首败停队列，余项pending；无自动恢复。整队列独立资源/守卫包含两条间隔与导出，避免只看B峰值。distinctVideoCount统计实际执行收据的视频哈希，重复一个素材不等于多素材证据。A的单条样本门禁、账号/周期/身份/恢复绑定保持；0.5.0新增run-batch正式一次选材后串行详情/下载，默认HTML，以上当前节为准。
 
 串行队列导出在运行锁内核对expected attempt；期间latest被其他已完成任务替换则delivery_cv_attempt_changed停止，不能将另一attempt的报告混入当前条收据。failcnt表示触限计数，不等于OOM次数；PSI字段缺失时压力未知。
+
+## 0.5.2千川源视频尺寸准入
+
+config/media-input-policy.json：长边≤1936（比1920增加16），总像素≤3,686,400，不扩大原规则隐含的最大面积；保持180秒/60fps/128MiB及所有内存阈值。CV处理仍最大边320，无原视频裁剪/转码。probe.json保存原始宽高/视频SHA与admission（policy、observed、violations、dimensionToleranceUsed），尺寸超限media_input_limit会保存媒体信息与validation=not_run，HTML直接显示实际值/上限；成功A收据绑定原媒体，宽高身份比较保持精确匹配。未新增队列续跑/跳过失败。

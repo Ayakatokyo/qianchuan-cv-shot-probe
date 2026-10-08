@@ -26,8 +26,25 @@ class BatchVisualTests(unittest.TestCase):
     def request(self,count=3):
         request=intake.request();request['query_spec']['collection']={'targetTopN':count} if intake.PLATFORM=='qianchuan' else {'target_top_n':count}
         return request
-    def test_one_selection_three_distinct_materials_actual_serial_A_B_and_one_html(self):
-        output=self.parent/'batch';result=batch.run_batch(self.request(),output)
+    def test_all_three_acquisitions_finish_before_serial_cv_and_one_html(self):
+        import cv_probe
+        output=self.parent/'batch';original=cv_probe.probe_cv;order=[]
+        def ordered_cv(root,**kwargs):
+            self.assertEqual(len(self.state['detailIds']),3)
+            self.assertEqual(self.state['videoGets'],3)
+            saved=core.read(output/'batch.json')
+            self.assertEqual(saved['acquiredCount'],3);self.assertEqual(saved['stage'],'cv')
+            for item in saved['entries']:
+                self.assertEqual(item['acquisitionStatus'],'video_ready')
+                self.assertEqual(core.read(Path(item['runDir'])/'status.json')['status'],'video_ready')
+            for previous in saved['entries'][:len(order)]:
+                self.assertEqual(previous['processCleanup']['status'],'completed')
+            order.append(Path(root).name)
+            return original(root,**kwargs)
+        with patch.object(cv_probe,'probe_cv',side_effect=ordered_cv):
+            result=batch.run_batch(self.request(),output)
+        self.assertEqual(order,['item-1','item-2','item-3'])
+        self.assertEqual(result['stage'],'complete');self.assertEqual(result['acquiredCount'],3)
         self.assertEqual(result['status'],'succeeded',result)
         self.assertEqual(result['completedCount'],3);self.assertEqual(self.state['selectionCalls'],1)
         self.assertEqual(len(set(self.state['detailIds'])),3);self.assertEqual(result['distinctVideoCount'],2)
@@ -112,7 +129,7 @@ class BatchVisualTests(unittest.TestCase):
         self.assertEqual(receipt['status'],'failed');self.assertFalse(receipt['outputPublished'])
         self.assertEqual(receipt['guardStopReason'],'working_set_ceiling')
 
-    def test_shared_selection_changed_between_items_stops_before_second_detail(self):
+    def test_shared_selection_changed_during_cv_stops_before_second_worker(self):
         import cv_probe
         original=cv_probe.probe_cv
         def mutate(root,**kwargs):
@@ -123,5 +140,82 @@ class BatchVisualTests(unittest.TestCase):
             return result
         with patch.object(cv_probe,'probe_cv',side_effect=mutate):result=batch.run_batch(self.request(),self.parent/'changed')
         self.assertEqual(result['status'],'failed');self.assertEqual(result['completedCount'],1)
-        self.assertEqual(result['errorCode'],'selection_source_changed');self.assertEqual(len(self.state['detailIds']),1)
+        self.assertEqual(result['errorCode'],'artifact_changed');self.assertEqual(len(self.state['detailIds']),3)
+        self.assertEqual(result['acquiredCount'],3)
         self.assertEqual(result['entries'][2]['status'],'pending')
+
+    def test_second_bad_csv_keeps_first_input_but_launches_no_cv(self):
+        original=batch.acquire;calls=0
+        def acquire(root_request,root,**kwargs):
+            nonlocal calls
+            calls+=1
+            if calls==2:self.state['wrongId']=True
+            return original(root_request,root,**kwargs)
+        with patch.object(batch,'acquire',side_effect=acquire),patch('cv_probe.probe_cv') as cv:
+            result=batch.run_batch(self.request(),self.parent/'second-bad-csv')
+        cv.assert_not_called()
+        self.assertEqual(result['status'],'failed');self.assertEqual(result['stage'],'acquisition')
+        self.assertEqual(result['acquiredCount'],1);self.assertEqual(result['completedCount'],0)
+        self.assertEqual(len(self.state['detailIds']),2)
+        self.assertEqual([e['acquisitionStatus'] for e in result['entries']],['video_ready','failed','pending'])
+        self.assertEqual([e['cvStatus'] for e in result['entries']],['pending']*3)
+        core.verify(Path(result['entries'][0]['runDir']))
+
+    def test_shared_selection_changed_during_acquisition_launches_no_cv(self):
+        original=batch.acquire
+        def mutate(root_request,root,**kwargs):
+            result=original(root_request,root,**kwargs)
+            source=next((Path(root)/'acquisition').glob('batch-source.*'))
+            with source.open('ab') as handle:handle.write(b'changed')
+            return result
+        with patch.object(batch,'acquire',side_effect=mutate),patch('cv_probe.probe_cv') as cv:
+            result=batch.run_batch(self.request(),self.parent/'changed-A')
+        cv.assert_not_called()
+        self.assertEqual(result['errorCode'],'selection_source_changed')
+        self.assertEqual(len(self.state['detailIds']),1);self.assertEqual(result['acquiredCount'],1)
+
+    def test_second_cv_failure_keeps_all_inputs_and_first_result(self):
+        import cv_probe
+        original=cv_probe.probe_cv;calls=0
+        def fail_second(root,**kwargs):
+            nonlocal calls
+            calls+=1
+            if calls==2:raise core.ProbeError('synthetic_cv_failure')
+            return original(root,**kwargs)
+        with patch.object(cv_probe,'probe_cv',side_effect=fail_second):
+            result=batch.run_batch(self.request(),self.parent/'failed-B')
+        self.assertEqual(calls,2);self.assertEqual(len(self.state['detailIds']),3)
+        self.assertEqual(result['acquiredCount'],3);self.assertEqual(result['completedCount'],1)
+        self.assertEqual(result['stage'],'cv');self.assertEqual(result['errorCode'],'synthetic_cv_failure')
+        self.assertEqual([e['status'] for e in result['entries']],['succeeded','failed','pending'])
+        self.assertEqual([e['cvStatus'] for e in result['entries']],['succeeded','failed','pending'])
+        for entry in result['entries']:core.verify(Path(entry['runDir']))
+
+    def test_unconfirmed_cv_cleanup_stops_before_next_worker(self):
+        import cv_probe
+        original=cv_probe.probe_cv
+        def unconfirmed(root,**kwargs):
+            result=original(root,**kwargs)
+            path=Path(root)/'cv'/kwargs['attempt_id']/'receipt.json'
+            receipt=core.read(path);receipt['processCleanup']['status']='unconfirmed'
+            core.write(path,receipt)
+            return result
+        with patch.object(cv_probe,'probe_cv',side_effect=unconfirmed) as cv:
+            result=batch.run_batch(self.request(),self.parent/'cleanup-B')
+        self.assertEqual(cv.call_count,1);self.assertEqual(result['acquiredCount'],3)
+        self.assertEqual(result['errorCode'],'process_cleanup_unconfirmed')
+        self.assertEqual(result['completedCount'],0)
+        self.assertEqual([e['status'] for e in result['entries']],['failed','pending','pending'])
+
+    def test_memory_guard_at_phase_barrier_launches_no_worker(self):
+        original=batch.StageMonitor.checkpoint
+        def checkpoint(monitor,stage):
+            if stage=='batch_all_acquisitions_complete':
+                raise core.ProbeError('synthetic_phase_guard')
+            return original(monitor,stage)
+        with patch.object(batch.StageMonitor,'checkpoint',new=checkpoint),patch('cv_probe.probe_cv') as cv:
+            result=batch.run_batch(self.request(),self.parent/'phase-guard')
+        cv.assert_not_called()
+        self.assertEqual(result['acquiredCount'],3);self.assertEqual(result['completedCount'],0)
+        self.assertEqual(result['errorCode'],'synthetic_phase_guard')
+        self.assertEqual([e['cvStatus'] for e in result['entries']],['pending']*3)

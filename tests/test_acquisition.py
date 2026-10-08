@@ -243,9 +243,27 @@ class AcquisitionTests(unittest.TestCase):
         summary=core.resource_summary(root)
         self.assertEqual(summary['elapsedObservedSec'],100);self.assertEqual(summary['activeSampledSec'],2)
     def test_media_input_limit(self):
-        with patch('probe_core.shutil.which',return_value='/fake/ffprobe'),patch('probe_core.subprocess.run') as run:
+        with patch('probe_core.shutil.which',return_value='/fake/ffprobe'),patch('probe_core.digest',return_value='fixture-binary-sha'),patch('probe_core.subprocess.run') as run:
             run.return_value=type('R',(),{'returncode':0,'stdout':json.dumps({'streams':[{'codec_type':'video','codec_name':'h264','width':3840,'height':2160,'avg_frame_rate':'25/1'}],'format':{'duration':'1'}})})()
             with self.assertRaises(core.ProbeError):core.probe_media(self.video)
+
+    def test_dimension_limit_persists_measured_media_and_human_diagnostic(self):
+        root=Path(self.root_temp.name)/'oversized'
+        def oversized(path):
+            media={'width':1080,'height':1938,'durationSec':1,'fps':30,'codec':'h264'}
+            core.require_media_input(media,core.media_input_admission(media))
+        with self.assertRaises(core.ProbeError) as error:core.acquire(request(),root,media_probe=oversized)
+        self.assertEqual(error.exception.code,'media_input_limit')
+        measured=core.read(root/'media/probe.json')
+        self.assertEqual(measured['media']['height'],1938)
+        self.assertEqual(measured['admission']['status'],'rejected')
+        self.assertEqual(measured['validation']['status'],'not_run')
+        public=core.read(root/'report/report.json')
+        self.assertFalse(public['acquisitionVerified']);self.assertEqual(public['cvStatus'],'not_run')
+        self.assertEqual(public['mediaAdmission']['violations'][0]['field'],'longEdge')
+        html=(root/'report/index.html').read_text()
+        self.assertIn('1938',html);self.assertIn('1936',html);self.assertIn('媒体输入超限',html)
+        self.assertFalse((root/'acquisition/receipt.json').exists())
 
     def test_stage_pause_preserves_selection_and_resume_no_reselection(self):
         import runtime_memory

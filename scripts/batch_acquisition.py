@@ -1,4 +1,4 @@
-"""One selection, bounded distinct-material serial A+B. No automatic retries."""
+"""One selection, all serial acquisition before serial CV. No automatic retries."""
 from pathlib import Path
 import uuid
 from probe_core import (ROOT, ProbeError, Gateway, acquire, external_root, read, write,
@@ -15,8 +15,8 @@ def run_batch(request, output, *, gateway_factory=Gateway):
     write(selection_root/'request.json',normalized)
     result={'schemaVersion':1,'packageVersion':read(ROOT/'config/platform.json')['version'],
             'platform':read(ROOT/'config/platform.json')['platform'],'batchId':'batch-'+uuid.uuid4().hex[:12],
-            'status':'running','concurrency':1,'requestedCount':count,'selectedCount':0,'completedCount':0,
-            'acquisition':'one_selection_serial_A_B','entries':[]}
+            'status':'running','stage':'selection','concurrency':1,'requestedCount':count,'selectedCount':0,'acquiredCount':0,'completedCount':0,
+            'acquisition':'one_selection_all_A_then_serial_B','entries':[]}
     write(output/'batch.json',result)
     gateway=None;monitor=StageMonitor(output,'batch_selection')
     try:
@@ -36,22 +36,34 @@ def run_batch(request, output, *, gateway_factory=Gateway):
             write(selection_root/'acquisition/queue.json',queue)
             queue_sha=digest(selection_root/'acquisition/queue.json')
             result.update(selectedCount=len(selected),selectionSha256=queue_sha,
-                          shortageCount=count-len(selected),entries=[{'index':i,'materialId':mid,'status':'pending'} for i,mid in enumerate(ids,1)])
+                          shortageCount=count-len(selected),entries=[{'index':i,'materialId':mid,'status':'pending','acquisitionStatus':'pending','cvStatus':'pending'} for i,mid in enumerate(ids,1)])
             write(output/'batch.json',result)
             release_completed(selection_root,'batch_selection_complete')
             # Close the selection session before any detail work; never reselect per material.
             session=getattr(gateway,'session',None)
             if session is not None and hasattr(session,'close'):session.close()
             gateway=None
+            result['stage']='acquisition';write(output/'batch.json',result)
             for entry,(material,params) in zip(result['entries'],selected):
-                monitor.checkpoint('batch_A_'+str(entry['index']))
                 root=output/'runs'/('item-'+str(entry['index']))
-                entry.update(status='running',runDir=str(root));write(output/'batch.json',result)
+                entry.update(status='running',acquisitionStatus='running',runDir=str(root));write(output/'batch.json',result)
+                monitor.checkpoint('batch_A_'+str(entry['index']))
                 seed={'material':material,'params':params,'sourcePath':str(source),
                       'sourceArtifact':{'path':source.name,'sha256':source_ref['sha256'],'sizeBytes':source_ref['sizeBytes']},
                       'binding':{'batchId':result['batchId'],'index':entry['index'],'queueSha256':queue_sha,
                                  'requestSha256':queue['requestSha256'],'source':source_ref,'selectedMaterialSha256':fingerprint({'material':material,'params':params})}}
                 acquire(normalized,root,gateway_factory=gateway_factory,adapter=adapter,selection_seed=seed)
+                entry.update(status='pending',acquisitionStatus='video_ready')
+                result['acquiredCount']+=1
+                release_completed(root,'batch_acquisition_complete')
+                write(output/'batch.json',result)
+                monitor.checkpoint('batch_acquisition_complete_'+str(entry['index']))
+            # Phase barrier: no CV is launched until every selected input is ready.
+            result['stage']='cv';write(output/'batch.json',result)
+            monitor.checkpoint('batch_all_acquisitions_complete')
+            for entry in result['entries']:
+                root=Path(entry['runDir'])
+                entry.update(status='running',cvStatus='running');write(output/'batch.json',result)
                 monitor.checkpoint('batch_B_'+str(entry['index']))
                 attempt=result['batchId']+'-'+str(entry['index']);entry['attemptId']=attempt
                 probe_cv(root,attempt_id=attempt,backend='ffmpeg-scene')
@@ -67,13 +79,18 @@ def run_batch(request, output, *, gateway_factory=Gateway):
                 write(output/'batch.json',result)
             result['status']='succeeded' if len(selected)==count else 'partial'
             write(output/'batch.json',result)
+            result['stage']='delivery';write(output/'batch.json',result)
             monitor.checkpoint('batch_html')
             result['report']=export_batch_html(output,output/'index.html')
         monitor.check()
+        result['stage']='complete'
     except Exception as exc:
         result.update(status='failed',errorCode=getattr(exc,'code','batch_failed'),message=safe_error(exc))
         for entry in result['entries']:
-            if entry['status']=='running':entry.update(status='failed',errorCode=result['errorCode'])
+            if entry['status']=='running':
+                entry.update(status='failed',errorCode=result['errorCode'])
+                if entry['acquisitionStatus']=='running':entry['acquisitionStatus']='failed'
+                if entry['cvStatus']=='running':entry['cvStatus']='failed'
         # Preserve completed work; a safe compact report can still describe partial results.
         if monitor.failure is None:
             try:
@@ -85,6 +102,6 @@ def run_batch(request, output, *, gateway_factory=Gateway):
         if session is not None and hasattr(session,'close'):session.close()
         result['distinctVideoCount']=len({e['inputVideoSha256'] for e in result['entries'] if e.get('inputVideoSha256')})
         result['guardStopReason']=monitor.failure;result['memoryObservation']=resource_summary(output)
-        write(output/'status.json',{'status':result['status'],'stage':'batch_complete','errorCode':result.get('errorCode')})
+        write(output/'status.json',{'status':result['status'],'stage':result['stage'],'errorCode':result.get('errorCode')})
         write(output/'batch.json',result)
     return result
