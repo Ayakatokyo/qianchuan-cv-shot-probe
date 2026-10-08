@@ -6,19 +6,12 @@ requires:
   env:
   - ENV_BACKEND_HOST
   - YUCE_AUTHORIZATION
-pre_input: '请按千川视频CV分镜技能的当前流程执行；按用户要求处理1–10条素材，未指定数量默认1条；一次提问完成串行A+B和可视化报告。
-
+pre_input: |
   千川授权店铺：__field:api_shop__
-
   千川RPA授权账号：__field:rpa_shop__
-
   时间范围：__field:date_range__
-
   详情素材数：__field:top_n__
-
   筛选与排序条件：__field:material_filter_sort__
-
-  详情素材数就是本次要完成CV分镜的素材数量，读取表单top_n并写入collection.targetTopN；用户最新明确数量与表单预填冲突时说明调整并以用户要求为准，不新增批量数量字段。数量1–10，不能把“执行3条”降成1条，超过10条说明单次上限并等待用户选择分批范围。一次新取数使用run-batch：仅获取一次榜单并选出不同素材，然后逐条校验详情CSV、下载、CV和进程清理。不要对同一TOP1重复调用acquire凑数量，不提前导出A技术ZIP。默认交付一份可离线打开的可视化HTML，内嵌代表帧，不复制MP4、不导出大ZIP；仅明确要求审计时导出完整技术包。复用已有输入时用probe-cv-batch，默认仍只交付一份HTML，不重取数或下载；缺少完整A目录时说明缺口并停。筛选后不足指定数量时如实报告缺口，不补位；每条完成清理后再开始下一条，失败或内存不足立即停止，不自动重试或提高停止阈值。'
 skill_form:
 - key: api_shop
   type: api_shop
