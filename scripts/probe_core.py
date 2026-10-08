@@ -151,8 +151,9 @@ class Resources:
     def __exit__(self,*args):
         self.stop.set();self.thread.join();self.sample()
 
-def download(url, target, *, max_bytes, session=None, deadline=600, receipt_path=None, receipt_root=None):
+def download(url, target, *, max_bytes, session=None, deadline=600, receipt_path=None, receipt_root=None,stop_check=None):
     import requests
+    if stop_check:stop_check()
     parsed=urlsplit(url) if isinstance(url,str) else None
     if not parsed or parsed.scheme not in ('http','https') or not parsed.netloc or parsed.username or parsed.password:
         raise ProbeError('download_url_invalid')
@@ -170,6 +171,7 @@ def download(url, target, *, max_bytes, session=None, deadline=600, receipt_path
             if declared>max_bytes:raise ProbeError('input_limit')
         with partial.open('wb') as handle:
             for chunk in response.iter_content(chunk_size=1024*1024):
+                if stop_check:stop_check()
                 if time.monotonic()-started>deadline:raise ProbeError('download_timeout')
                 if not chunk:continue
                 size+=len(chunk)
@@ -237,7 +239,16 @@ class Gateway:
         matches=[r for r in rows if str(r.get('shop_id') or r.get('shopId') or r.get('id'))==shop and r.get('platform') in (None,'',detail['platformCode'])] if isinstance(rows,list) else []
         if len(matches)!=1:raise ProbeError('rpa_shop_not_authorized')
         return matches[0]
-    def csv(self,phase,code,params,shop):
+    def submit_csv(self,phase,code,params,shop,*,require_existing=False,stop_check=None):
+        if stop_check:stop_check()
+        # Batch collection/media use only already-authorized, exactly bound IDs.
+        if require_existing:
+            tasks=read(self.root/'acquisition/tasks.json') if (self.root/'acquisition/tasks.json').exists() else {}
+            task=tasks.get(phase)
+            if task is None:raise ProbeError('rpa_task_missing')
+            if task.get('fingerprint')!=fingerprint({'code':code,'params':params,'shop':shop}):raise ProbeError('task_binding_changed')
+            if not task.get('taskId'):raise ProbeError('submission_unconfirmed')
+            return task
         detail=self.detail(code);self.account(detail,shop);validate_business_params(detail,params)
         tasks=read(self.root/'acquisition/tasks.json') if (self.root/'acquisition/tasks.json').exists() else {}
         signature=fingerprint({'code':code,'params':params,'shop':shop})
@@ -246,13 +257,21 @@ class Gateway:
             if task.get('fingerprint')!=signature:raise ProbeError('task_binding_changed')
             if not task.get('taskId'):raise ProbeError('submission_unconfirmed')
         else:
+            if stop_check:stop_check()
             task={'connectorCode':code,'fingerprint':signature,'status':'submission_intent','taskId':None};tasks[phase]=task
             write(self.root/'acquisition/tasks.json',tasks)
             result=self.post('/adg/v1/agent/fetch/tasks',{'authorization':self.auth,'agent_session_id':self.agent,'data_source_type':'rpa','platform':detail['platformCode'],'function_code':code,'business_params':params,'shop_id':shop})
             if not isinstance(result,dict) or not result.get('task_group_id'):raise ProbeError('submission_unconfirmed')
             task.update(taskId=result['task_group_id'],status='submitted');write(self.root/'acquisition/tasks.json',tasks)
+        return task
+    def csv(self,phase,code,params,shop,*,require_existing=False,stop_check=None):
+        task=self.submit_csv(phase,code,params,shop,require_existing=require_existing,stop_check=stop_check)
+        tasks=read(self.root/'acquisition/tasks.json');task=tasks[phase]
+        path=self.root/'acquisition'/f'{phase}.csv'
+        if task['status'] in ('completed','partial_success') and path.exists():return safe_file(self.root,f'acquisition/{phase}.csv')
         started=time.monotonic()
         while True:
+            if stop_check:stop_check()
             result=self.post('/adg/v1/agent/fetch/tasks/status',{'authorization':self.auth,'task_group_id':task['taskId']})
             if not isinstance(result,dict):raise ProbeError('rpa_result_unconfirmed')
             state=str(result.get('status','')).lower();task['status']=state;write(self.root/'acquisition/tasks.json',tasks)
@@ -262,7 +281,8 @@ class Gateway:
             if time.monotonic()-started>=3600:raise ProbeError('rpa_timeout')
             self.sleep(10)
         path=self.root/'acquisition'/f'{phase}.csv'
-        if not path.exists():download(file_urls(result),path,max_bytes=CSV_LIMIT)
+        if stop_check:stop_check()
+        if not path.exists():download(file_urls(result),path,max_bytes=CSV_LIMIT,stop_check=stop_check)
         return path
 
 def media_input_admission(media):
@@ -444,7 +464,10 @@ def report(root):
     write(target/'receipt.json',{'artifacts':[artifact(target/'index.html',root),artifact(target/'report.json',root)]})
     return {'status':public['status'],'reportPath':str(target/'index.html'),'cvStatus':cv['status']}
 
-def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,media_probe=probe_media,selection_seed=None):
+def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,media_probe=probe_media,selection_seed=None,_rpa_phase='complete',_operation_check=None):
+    if _rpa_phase not in ('complete','submit','collect','media'):raise ProbeError('rpa_phase_invalid')
+    if _rpa_phase=='submit' and (resume or selection_seed is None):raise ProbeError('rpa_phase_invalid')
+    if _rpa_phase in ('collect','media') and not resume:raise ProbeError('rpa_phase_invalid')
     adapter=adapter or __import__('platform_adapter')
     root=external_root(root)
     normalized=adapter.validate(request)
@@ -503,7 +526,11 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                 transition(root,'detail_rpa',firstBatchCsvGate={'status':'unconfirmed'})
                 release_completed(root,'selection_complete')
                 check_stage(root,'detail_rpa')
-                csv_path=gateway.csv('detail',adapter.DETAIL_CODE,params,normalized['rpa_shop'])
+                if _rpa_phase=='submit':
+                    task=gateway.submit_csv('detail',adapter.DETAIL_CODE,params,normalized['rpa_shop'],stop_check=_operation_check)
+                    transition(root,'detail_rpa','submitted')
+                    return {'status':'submitted','taskId':task['taskId']}
+                csv_path=gateway.csv('detail',adapter.DETAIL_CODE,params,normalized['rpa_shop'],require_existing=_rpa_phase in ('collect','media'),stop_check=_operation_check)
                 transition(root,'detail_csv_validation')
                 accepted=root/'acquisition/csv-receipt.json'
                 if accepted.exists() and artifact(csv_path,root)!=read(accepted):raise ProbeError('accepted_csv_changed')
@@ -518,6 +545,9 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                     raise ProbeError('first_batch_no_valid_csv') from exc
                 write(accepted,artifact(csv_path,root))
                 write(root/'acquisition/source.json',evidence)
+                if _rpa_phase=='collect':
+                    transition(root,'detail_csv_validation','csv_ready',firstBatchCsvGate={'status':'passed'})
+                    return {'status':'csv_ready'}
                 transition(root,'video_download',firstBatchCsvGate={'status':'passed'})
                 release_completed(root,'csv_complete')
                 check_stage(root,'video_download')
@@ -526,10 +556,11 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                     prior=read(root/'media/download-receipt.json')
                     if digest(video)!=prior['sha256']:raise ProbeError('artifact_changed')
                 else:
-                    download(evidence['url'],video,max_bytes=VIDEO_LIMIT,receipt_path=root/'media/download-receipt.json',receipt_root=root)
+                    download(evidence['url'],video,max_bytes=VIDEO_LIMIT,receipt_path=root/'media/download-receipt.json',receipt_root=root,stop_check=_operation_check)
                 transition(root,'media_probe')
                 release_completed(root,'video_download_complete')
                 check_stage(root,'media_probe')
+                if _operation_check:_operation_check()
                 try:media=media_probe(video)
                 except ProbeError as exc:
                     if hasattr(exc,'media') and hasattr(exc,'admission'):

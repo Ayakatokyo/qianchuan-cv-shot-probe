@@ -1,9 +1,87 @@
-"""One selection, all serial acquisition before serial CV. No automatic retries."""
+"""One selection, three-task RPA waves and serial media before serial CV. No automatic retries."""
 from pathlib import Path
 import uuid
 from probe_core import (ROOT, ProbeError, Gateway, acquire, external_root, read, write,
                         artifact, safe_file, digest, fingerprint, resource_summary, safe_error)
 from runtime_memory import StageMonitor, check_stage, release_completed
+
+
+RPA_CONCURRENCY = 3
+
+
+def acquire_waves(normalized, selected, source, source_ref, queue, queue_sha, result, output, gateway_factory, adapter, monitor):
+    """At most three remote tasks; collect a whole wave before serial media work.
+    Drain known submissions on ordinary failure, never refill or resubmit.
+    """
+    def save():write(output/'batch.json',result)
+    def fail(entry,exc):
+        entry.update(status='failed',acquisitionStatus='failed',errorCode=getattr(exc,'code','acquisition_failed'))
+        tasks=read(Path(entry['runDir'])/'acquisition/tasks.json') if (Path(entry['runDir'])/'acquisition/tasks.json').exists() else {}
+        task=tasks.get('detail',{})
+        entry['rpaStatus']='csv_ready' if entry.get('rpaStatus')=='csv_ready' else 'failed' if task.get('status') in ('completed','partial_success','failed') else 'unconfirmed'
+        save()
+    result['rpaWaves']=[];result['rpaSubmissionCount']=0
+    for offset in range(0,len(selected),RPA_CONCURRENCY):
+        cohort=result['entries'][offset:offset+RPA_CONCURRENCY]
+        wave={'index':len(result['rpaWaves'])+1,'materialIds':[e['materialId'] for e in cohort],'status':'submitting'}
+        result['rpaWaves'].append(wave);errors=[]
+        if offset==0:
+            result['firstBatchCsvGate']={'status':'pending','materialIds':wave['materialIds'],'outcomes':{},'validCsvCount':0}
+        save()
+        for entry,(material,params) in zip(cohort,selected[offset:offset+RPA_CONCURRENCY]):
+            root=output/'runs'/('item-'+str(entry['index']))
+            entry.update(status='running',acquisitionStatus='running',runDir=str(root),rpaWave=wave['index'])
+            result['acquisitionPhase']='detail_submit';save()
+            monitor.checkpoint('batch_A_'+str(entry['index']))
+            seed={'material':material,'params':params,'sourcePath':str(source),
+                  'sourceArtifact':{'path':source.name,'sha256':source_ref['sha256'],'sizeBytes':source_ref['sizeBytes']},
+                  'binding':{'batchId':result['batchId'],'index':entry['index'],'queueSha256':queue_sha,
+                             'requestSha256':queue['requestSha256'],'source':source_ref,'selectedMaterialSha256':fingerprint({'material':material,'params':params})}}
+            try:
+                submitted=acquire(normalized,root,gateway_factory=gateway_factory,adapter=adapter,selection_seed=seed,_rpa_phase='submit',_operation_check=monitor.check)
+                entry.update(status='pending',acquisitionStatus='submitted',rpaStatus='submitted',taskId=submitted['taskId'])
+                result['rpaSubmissionCount']+=1;save()
+            except Exception as exc:
+                fail(entry,exc);errors.append((entry['index'],exc));break
+        wave['status']='collecting';result['acquisitionPhase']='detail_csv';save()
+        # Even if one CSV fails, observe the other already-submitted task IDs.
+        for entry in cohort:
+            if entry.get('rpaStatus')!='submitted':continue
+            monitor.checkpoint('batch_collect_'+str(entry['index']))
+            entry['status']='running';save()
+            try:
+                acquire(normalized,Path(entry['runDir']),resume=True,gateway_factory=gateway_factory,adapter=adapter,_rpa_phase='collect',_operation_check=monitor.check)
+                entry.update(status='pending',acquisitionStatus='csv_ready',rpaStatus='csv_ready')
+            except Exception as exc:
+                fail(entry,exc);errors.append((entry['index'],exc))
+            save()
+        if offset==0:
+            gate=result['firstBatchCsvGate'];outcomes={}
+            for entry in cohort:
+                root=Path(entry['runDir']) if entry.get('runDir') else None
+                state=read(root/'status.json') if root and (root/'status.json').exists() else {}
+                child_gate=state.get('firstBatchCsvGate',{}).get('status')
+                outcomes[entry['materialId']]='valid_csv' if child_gate=='passed' else 'unconfirmed' if entry.get('rpaStatus') in (None,'submitted','unconfirmed') else 'no_valid_csv'
+            gate.update(outcomes=outcomes,validCsvCount=sum(v=='valid_csv' for v in outcomes.values()))
+            gate['status']='unconfirmed' if 'unconfirmed' in outcomes.values() else 'passed' if gate['validCsvCount'] else 'blocked'
+            save()
+        # Retain valid earlier A inputs; do not download past the first failed item.
+        boundary=min((i for i,_ in errors),default=len(selected)+1)
+        wave['status']='media';result['acquisitionPhase']='video';save()
+        for entry in cohort:
+            if entry['index']>=boundary or entry.get('rpaStatus')!='csv_ready':continue
+            monitor.checkpoint('batch_media_'+str(entry['index']))
+            entry['status']='running';save()
+            try:
+                root=Path(entry['runDir'])
+                acquire(normalized,root,resume=True,gateway_factory=gateway_factory,adapter=adapter,_rpa_phase='media',_operation_check=monitor.check)
+                entry.update(status='pending',acquisitionStatus='video_ready')
+                result['acquiredCount']+=1;release_completed(root,'batch_acquisition_complete');save()
+                monitor.checkpoint('batch_acquisition_complete_'+str(entry['index']))
+            except Exception as exc:
+                fail(entry,exc);errors.append((entry['index'],exc));break
+        wave['status']='failed' if errors else 'completed';save()
+        if errors:raise min(errors,key=lambda item:item[0])[1]
 
 
 def run_batch(request, output, *, gateway_factory=Gateway):
@@ -15,8 +93,8 @@ def run_batch(request, output, *, gateway_factory=Gateway):
     write(selection_root/'request.json',normalized)
     result={'schemaVersion':1,'packageVersion':read(ROOT/'config/platform.json')['version'],
             'platform':read(ROOT/'config/platform.json')['platform'],'batchId':'batch-'+uuid.uuid4().hex[:12],
-            'status':'running','stage':'selection','concurrency':1,'requestedCount':count,'selectedCount':0,'acquiredCount':0,'completedCount':0,
-            'acquisition':'one_selection_all_A_then_serial_B','entries':[]}
+            'status':'running','stage':'selection','concurrency':1,'rpaConcurrency':RPA_CONCURRENCY,'mediaConcurrency':1,'cvConcurrency':1,'requestedCount':count,'selectedCount':0,'acquiredCount':0,'completedCount':0,
+            'acquisition':'one_selection_rpa_waves_then_serial_B','entries':[]}
     write(output/'batch.json',result)
     gateway=None;monitor=StageMonitor(output,'batch_selection')
     try:
@@ -44,20 +122,7 @@ def run_batch(request, output, *, gateway_factory=Gateway):
             if session is not None and hasattr(session,'close'):session.close()
             gateway=None
             result['stage']='acquisition';write(output/'batch.json',result)
-            for entry,(material,params) in zip(result['entries'],selected):
-                root=output/'runs'/('item-'+str(entry['index']))
-                entry.update(status='running',acquisitionStatus='running',runDir=str(root));write(output/'batch.json',result)
-                monitor.checkpoint('batch_A_'+str(entry['index']))
-                seed={'material':material,'params':params,'sourcePath':str(source),
-                      'sourceArtifact':{'path':source.name,'sha256':source_ref['sha256'],'sizeBytes':source_ref['sizeBytes']},
-                      'binding':{'batchId':result['batchId'],'index':entry['index'],'queueSha256':queue_sha,
-                                 'requestSha256':queue['requestSha256'],'source':source_ref,'selectedMaterialSha256':fingerprint({'material':material,'params':params})}}
-                acquire(normalized,root,gateway_factory=gateway_factory,adapter=adapter,selection_seed=seed)
-                entry.update(status='pending',acquisitionStatus='video_ready')
-                result['acquiredCount']+=1
-                release_completed(root,'batch_acquisition_complete')
-                write(output/'batch.json',result)
-                monitor.checkpoint('batch_acquisition_complete_'+str(entry['index']))
+            acquire_waves(normalized,selected,source,source_ref,queue,queue_sha,result,output,gateway_factory,adapter,monitor)
             # Phase barrier: no CV is launched until every selected input is ready.
             result['stage']='cv';write(output/'batch.json',result)
             monitor.checkpoint('batch_all_acquisitions_complete')
@@ -86,6 +151,10 @@ def run_batch(request, output, *, gateway_factory=Gateway):
         result['stage']='complete'
     except Exception as exc:
         result.update(status='failed',errorCode=getattr(exc,'code','batch_failed'),message=safe_error(exc))
+        gate=result.get('firstBatchCsvGate',{})
+        if gate.get('status')=='pending':gate.update(status='unconfirmed',errorCode=result['errorCode'])
+        waves=result.get('rpaWaves',[])
+        if waves and waves[-1]['status'] not in ('completed','failed'):waves[-1].update(status='unconfirmed',errorCode=result['errorCode'])
         for entry in result['entries']:
             if entry['status']=='running':
                 entry.update(status='failed',errorCode=result['errorCode'])

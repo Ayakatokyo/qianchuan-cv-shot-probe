@@ -64,12 +64,13 @@ class BatchVisualTests(unittest.TestCase):
         # The shared source remains bound; modifying it invalidates every child.
         with source.open('ab') as handle:handle.write(b'tamper')
         with self.assertRaises(core.ProbeError):core.verify(Path(result['entries'][0]['runDir']))
-    def test_first_bad_csv_stops_without_second_submission_or_retry(self):
+    def test_bad_first_wave_csv_drains_three_without_new_wave_or_retry(self):
         self.state['wrongId']=True;output=self.parent/'failed'
         result=batch.run_batch(self.request(),output)
         self.assertEqual(result['status'],'failed');self.assertEqual(result['completedCount'],0)
-        self.assertEqual(len(self.state['detailIds']),1);self.assertEqual(self.state['videoGets'],0)
-        self.assertEqual([e['status'] for e in result['entries']],['failed','pending','pending'])
+        self.assertEqual(len(self.state['detailIds']),3);self.assertEqual(self.state['videoGets'],0)
+        self.assertEqual([e['status'] for e in result['entries']],['failed','failed','failed'])
+        self.assertEqual(result['firstBatchCsvGate']['status'],'blocked')
         run=Path(result['entries'][0]['runDir'])
         self.assertEqual(core.read(run/'status.json')['firstBatchCsvGate']['status'],'blocked')
     def test_shortage_is_visible_and_does_not_backfill(self):
@@ -148,16 +149,16 @@ class BatchVisualTests(unittest.TestCase):
         original=batch.acquire;calls=0
         def acquire(root_request,root,**kwargs):
             nonlocal calls
-            calls+=1
-            if calls==2:self.state['wrongId']=True
+            if kwargs.get('_rpa_phase')=='collect':
+                calls+=1;self.state['wrongId']=calls==2
             return original(root_request,root,**kwargs)
         with patch.object(batch,'acquire',side_effect=acquire),patch('cv_probe.probe_cv') as cv:
             result=batch.run_batch(self.request(),self.parent/'second-bad-csv')
         cv.assert_not_called()
         self.assertEqual(result['status'],'failed');self.assertEqual(result['stage'],'acquisition')
         self.assertEqual(result['acquiredCount'],1);self.assertEqual(result['completedCount'],0)
-        self.assertEqual(len(self.state['detailIds']),2)
-        self.assertEqual([e['acquisitionStatus'] for e in result['entries']],['video_ready','failed','pending'])
+        self.assertEqual(len(self.state['detailIds']),3)
+        self.assertEqual([e['acquisitionStatus'] for e in result['entries']],['video_ready','failed','csv_ready'])
         self.assertEqual([e['cvStatus'] for e in result['entries']],['pending']*3)
         core.verify(Path(result['entries'][0]['runDir']))
 
@@ -172,7 +173,7 @@ class BatchVisualTests(unittest.TestCase):
             result=batch.run_batch(self.request(),self.parent/'changed-A')
         cv.assert_not_called()
         self.assertEqual(result['errorCode'],'selection_source_changed')
-        self.assertEqual(len(self.state['detailIds']),1);self.assertEqual(result['acquiredCount'],1)
+        self.assertEqual(len(self.state['detailIds']),1);self.assertEqual(result['acquiredCount'],0)
 
     def test_second_cv_failure_keeps_all_inputs_and_first_result(self):
         import cv_probe

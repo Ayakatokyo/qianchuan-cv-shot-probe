@@ -1,6 +1,14 @@
-# 0.5.2当前输入与交付契约
+# 0.5.3当前输入与交付契约
 
-run-batch接受平台原QuerySpec与授权项，数量1–10；acquire仅数量1，批量拒绝use_run_batch。一次选材队列按已确认排序选择不同ID，数量不足标partial/shortageCount，绝不补位。千川targetTopN=candidateTopN，云图target_top_n≤10且candidate_top_n=1000。每条绑定原请求/共享源SHA/选择与队列SHA，源硬链接不复制报表；任意源变化停止。首条详情CSV必须确认真实、可解析、身份/周期匹配才继续，失败/未知/blocked停止全队列。先串行完成全部选中素材的A详情校验/下载，再按原顺序串行B；A失败不启动CV，B失败保留全部A和已完成B。batch.json区分stage、acquiredCount、completedCount与逐条acquisitionStatus/cvStatus。授权、日期、字段语义沿用以下既有契约。
+## 0.5.3详情RPA并行批次
+
+参考千川元技能/工作台与云图元技能/工作台的最多3条在途及首批CSV门禁策略。run-batch按既定选材顺序划分每批≤3条：先依次发出本批提交请求并保存各taskId，不等待上一条完成；再按原顺序轮询、下载并核验本批全部CSV；之后串行下载/核验视频，本批成功才提交下一批。RPA远端最多3个在途任务，本地媒体与CV并发仍1；全部批次A就绪才开始串行B。
+
+首批firstBatchCsvGate收齐结果：有未知/未提交结果为unconfirmed，全终态且至少一份有效CSV为passed，全无有效CSV为blocked。CV队列更严格，任一选中素材A失败都不提交新批、不启动B；即使首批gate passed也不能跳过失败素材继续。普通失败继续核实本批已保存taskId的其余任务，保留CSV/任务结果与失败前的有效A输入；不下载首个失败项之后的视频。队列守卫锁存后在提交、轮询、下载块及阶段边界合作停止本地新工作；执行中断保留原任务，保留在途证据，不能称远端任务已取消。未知提交保留submission_intent，不重提；collect/media只能复用已保存任务，缺taskId失败。
+
+batch.json记录rpaConcurrency=3、mediaConcurrency=1、cvConcurrency=1（旧concurrency=1仍指CV）、rpaSubmissionCount、rpaWaves、acquisitionPhase与逐条rpaWave/rpaStatus/taskId；提交计数只计已确认taskId，未知请求不算确认成功。视频仍原SHA/有界尺寸/严格身份，CSV缓存绑定与哈希复验不放宽。数量1/短缺/最后不足3条按实际条数提交，不滚动补位、不重抓榜单、不自动重试或恢复。
+
+run-batch接受平台原QuerySpec与授权项，数量1–10；acquire仅数量1，批量拒绝use_run_batch。一次选材队列按已确认排序选择不同ID，数量不足标partial/shortageCount，绝不补位。千川targetTopN=candidateTopN，云图target_top_n≤10且candidate_top_n=1000。每条绑定原请求/共享源SHA/选择与队列SHA，源硬链接不复制报表；任意源变化停止。首批最多3条详情CSV必须收齐并核验真实、可解析、身份/周期匹配；失败/未知/blocked不提交新批次。先每批最多3条提交详情RPA并核验本批CSV、串行下载/核验视频，全部批次A就绪，再按原顺序串行B；A失败不启动CV，B失败保留全部A和已完成B。batch.json区分stage、acquiredCount、completedCount与逐条acquisitionStatus/cvStatus。授权、日期、字段语义沿用以下既有契约。
 
 默认交付内嵌代表帧的单HTML；export-html校验已完成report.json快照收据及CV收据/镜头/帧，不读CSV或MP4，不具备重新验证完整A能力；完整A审计仍用verify，视频输入使用probe-cv时仍全验证。未提供完整A输入不能从HTML恢复B。旧export-report为显式审计大包选项，不能因为默认只有HTML称交付缺视频。旧节中“必须完整ZIP”为历史技术包规则，默认已由本节替代。
 
@@ -28,6 +36,6 @@ files报表的新规范检查点是原始CSV，流式验证全部必需指标后
 
 恢复选择的快捷路径要求0.4.0 selection-binding.json同时绑定原请求、selection-source和selection.json内容；任何变化停止。旧目录缺此绑定时用流式兼容路径重算原选择并比较，不把未绑定的选择文件直接信任为已验证。
 
-## 0.5.2千川源视频尺寸准入
+## 0.5.3千川源视频尺寸准入
 
 config/media-input-policy.json：长边≤1936（比1920增加16），总像素≤3,686,400，不扩大原规则隐含的最大面积；保持180秒/60fps/128MiB及所有内存阈值。CV处理仍最大边320，无原视频裁剪/转码。probe.json保存原始宽高/视频SHA与admission（policy、observed、violations、dimensionToleranceUsed），尺寸超限media_input_limit会保存媒体信息与validation=not_run，HTML直接显示实际值/上限；成功A收据绑定原媒体，宽高身份比较保持精确匹配。未新增队列续跑/跳过失败。

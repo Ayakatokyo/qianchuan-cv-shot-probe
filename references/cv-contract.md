@@ -1,6 +1,14 @@
-# 0.5.2当前批量与轻量报告
+# 0.5.3当前批量与轻量报告
 
-run-batch一次选材、1–10条不同素材、先全部串行A详情校验/下载，再串行B，保留全部输入门禁、原生worker和进程清理；A失败不启动任何B；B失败保留全部A和已完成B，未处理B为pending；短缺partial，不自动补位/恢复。acquire只做单条A；probe-cv-batch已有A默认一份HTML，--delivery audit才逐条大ZIP。默认export-html无MP4复制/读取或ZIP，已完成报告快照、CV收据输入SHA、镜头及代表帧核验；完整A输入核验留verify/probe-cv。HTML单帧256KiB、总图片12MiB，超限显示对应缺口、所有镜头区间保留；一帧一帧写入，不全量加载图片。中文素材导航/时间轴/大图/画廊参考现有元技能与脚本工作台。约200ms守卫和缓存建议保留在原目录html-exports，不默认再交付ZIP。默认报告不含视频播放，完整媒体留原目录；历史技术ZIP规则仅适用于显式审计。
+## 0.5.3详情RPA并行批次
+
+参考千川元技能/工作台与云图元技能/工作台的最多3条在途及首批CSV门禁策略。run-batch按既定选材顺序划分每批≤3条：先依次发出本批提交请求并保存各taskId，不等待上一条完成；再按原顺序轮询、下载并核验本批全部CSV；之后串行下载/核验视频，本批成功才提交下一批。RPA远端最多3个在途任务，本地媒体与CV并发仍1；全部批次A就绪才开始串行B。
+
+首批firstBatchCsvGate收齐结果：有未知/未提交结果为unconfirmed，全终态且至少一份有效CSV为passed，全无有效CSV为blocked。CV队列更严格，任一选中素材A失败都不提交新批、不启动B；即使首批gate passed也不能跳过失败素材继续。普通失败继续核实本批已保存taskId的其余任务，保留CSV/任务结果与失败前的有效A输入；不下载首个失败项之后的视频。队列守卫锁存后在提交、轮询、下载块及阶段边界合作停止本地新工作；执行中断保留原任务，保留在途证据，不能称远端任务已取消。未知提交保留submission_intent，不重提；collect/media只能复用已保存任务，缺taskId失败。
+
+batch.json记录rpaConcurrency=3、mediaConcurrency=1、cvConcurrency=1（旧concurrency=1仍指CV）、rpaSubmissionCount、rpaWaves、acquisitionPhase与逐条rpaWave/rpaStatus/taskId；提交计数只计已确认taskId，未知请求不算确认成功。视频仍原SHA/有界尺寸/严格身份，CSV缓存绑定与哈希复验不放宽。数量1/短缺/最后不足3条按实际条数提交，不滚动补位、不重抓榜单、不自动重试或恢复。
+
+run-batch一次选材、1–10条不同素材、先每批最多3条详情RPA和串行媒体核验、全部A就绪，再串行B，保留全部输入门禁、原生worker和进程清理；A失败不启动任何B；B失败保留全部A和已完成B，未处理B为pending；短缺partial，不自动补位/恢复。acquire只做单条A；probe-cv-batch已有A默认一份HTML，--delivery audit才逐条大ZIP。默认export-html无MP4复制/读取或ZIP，已完成报告快照、CV收据输入SHA、镜头及代表帧核验；完整A输入核验留verify/probe-cv。HTML单帧256KiB、总图片12MiB，超限显示对应缺口、所有镜头区间保留；一帧一帧写入，不全量加载图片。中文素材导航/时间轴/大图/画廊参考现有元技能与脚本工作台。约200ms守卫和缓存建议保留在原目录html-exports，不默认再交付ZIP。默认报告不含视频播放，完整媒体留原目录；历史技术ZIP规则仅适用于显式审计。
 
 # 分镜与内存契约（0.4.1）
 
@@ -54,6 +62,6 @@ probe-cv-batch --manifest-file --output-dir为已有A输入串行入口。清单
 
 串行队列导出在运行锁内核对expected attempt；期间latest被其他已完成任务替换则delivery_cv_attempt_changed停止，不能将另一attempt的报告混入当前条收据。failcnt表示触限计数，不等于OOM次数；PSI字段缺失时压力未知。
 
-## 0.5.2千川源视频尺寸准入
+## 0.5.3千川源视频尺寸准入
 
 config/media-input-policy.json：长边≤1936（比1920增加16），总像素≤3,686,400，不扩大原规则隐含的最大面积；保持180秒/60fps/128MiB及所有内存阈值。CV处理仍最大边320，无原视频裁剪/转码。probe.json保存原始宽高/视频SHA与admission（policy、observed、violations、dimensionToleranceUsed），尺寸超限media_input_limit会保存媒体信息与validation=not_run，HTML直接显示实际值/上限；成功A收据绑定原媒体，宽高身份比较保持精确匹配。未新增队列续跑/跳过失败。
