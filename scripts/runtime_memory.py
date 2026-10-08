@@ -30,7 +30,8 @@ def append_event(root, name, value):
 def check_stage(root, stage):
     from probe_core import ROOT, read, write, cgroup_snapshot, ProbeError
     config=read(ROOT/'config/cv-low-memory.json')
-    result=evaluate_guard(cgroup_snapshot(),config,tree_rss=process_tree_rss(os.getpid()),reserve_mib=policy()['stageReserveMiB'][stage])
+    baseline=cgroup_snapshot()
+    result=evaluate_guard(baseline,config,baseline=baseline,tree_rss=process_tree_rss(os.getpid()),reserve_mib=policy()['stageReserveMiB'][stage])
     result['stage']=stage
     append_event(root,'phase-memory.ndjson',result)
     write(Path(root)/'phase-memory.json',result)
@@ -173,7 +174,7 @@ class StageMonitor:
         from probe_core import ROOT, Resources, read, cgroup_snapshot
         self.root=Path(root);self.stage=stage
         self.config=read(ROOT/'config/cv-low-memory.json')
-        self.baseline=cgroup_snapshot();self.sampler=Resources(self.root,interval=.2)
+        self.baseline=cgroup_snapshot();self.sampler=Resources(self.root,interval=.2,baseline=self.baseline)
         self.stop=threading.Event();self.lock=threading.Lock();self.failure=None;self.thread=None
 
     def observe(self):

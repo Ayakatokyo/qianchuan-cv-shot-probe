@@ -102,11 +102,41 @@ def resource_id(value):
     if not isinstance(value, str) or not value.strip(): raise ProbeError('authorization_selection_invalid')
     return value.strip()
 
+def native_proc_meminfo_source(mounts):
+    """Accept only the longest native proc mount for the literal meminfo path."""
+    path=Path('/proc/meminfo')
+    if Path('/proc').is_symlink() or path.is_symlink():raise ValueError('proc_meminfo_symlink')
+    candidates=[]
+    for mount in mounts:
+        left,right=mount.split(' - ',1);fields=left.split()
+        unescape=lambda value:re.sub(r'\\([0-7]{3})',lambda m:chr(int(m[1],8)),value)
+        point=Path(unescape(fields[4]));mount_root=unescape(fields[3])
+        if path.is_relative_to(point):candidates.append((len(point.parts),right.split()[0],mount_root,str(point)))
+    if not candidates:raise ValueError('proc_meminfo_mount_unknown')
+    longest=max(entry[0] for entry in candidates)
+    matching=[entry for entry in candidates if entry[0]==longest]
+    if len(matching)!=1 or matching[0][1]!='proc' or matching[0][2]!='/':raise ValueError('proc_meminfo_source_rejected')
+    return {'path':'/proc/meminfo','fstype':'proc','mountRoot':'/','mountPoint':matching[0][3]}
+
+def native_proc_meminfo_read():
+    if Path('/proc').is_symlink() or Path('/proc/meminfo').is_symlink():raise ValueError('proc_meminfo_symlink')
+    descriptor=os.open('/proc/meminfo',os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
+    with os.fdopen(descriptor,encoding='utf-8') as handle:return handle.read()
+
 def cgroup_snapshot():
     # Resolve mount + membership; do not assume /sys/fs/cgroup is the process group.
     try:
         memberships=Path('/proc/self/cgroup').read_text().splitlines()
         mounts=Path('/proc/self/mountinfo').read_text().splitlines()
+        from memory_guard import proc_meminfo_bounds
+        native={'status':'unavailable','source':None,'before':None,'after':None,'upperBoundsBytes':None,'sampleTimes':{'before':None,'after':None},'errorCode':None}
+        compact=lambda raw:'\n'.join(line for line in raw.splitlines() if line.split() and line.split()[0] in ('Dirty:','Writeback:'))
+        before=None
+        try:
+            native['source']=native_proc_meminfo_source(mounts)
+            raw=native_proc_meminfo_read();native['sampleTimes']['before']=time.time();native['before']=compact(raw)
+            before=proc_meminfo_bounds(raw)
+        except (OSError,ValueError,IndexError,UnicodeError) as exc:native['errorCode']=str(exc) if isinstance(exc,ValueError) else 'proc_meminfo_unreadable'
         for line in memberships:
             _hier, controllers, member=line.split(':',2)
             v2=controllers==''
@@ -125,13 +155,21 @@ def cgroup_snapshot():
                 for name in names:
                     try:result[name]=(directory/name).read_text().strip()
                     except OSError:result[name]=None
+                if before is not None:
+                    try:
+                        raw=native_proc_meminfo_read();native['sampleTimes']['after']=time.time();native['after']=compact(raw)
+                        after=proc_meminfo_bounds(raw)
+                        if native_proc_meminfo_source(Path('/proc/self/mountinfo').read_text().splitlines())!=native['source']:raise ValueError('proc_meminfo_source_changed')
+                        native.update(status='available',upperBoundsBytes={key:max(before[key],after[key]) for key in before})
+                    except (OSError,ValueError,IndexError,UnicodeError) as exc:native['errorCode']=str(exc) if isinstance(exc,ValueError) else 'proc_meminfo_unreadable'
+                result['nativeProcMeminfo']=native
                 return result
     except (OSError, ValueError):pass
     return {'status':'unavailable'}
 
 class Resources:
-    def __init__(self, root, interval=1):
-        self.interval=interval; self.root=root; self.stop=threading.Event(); self.thread=None; self.attempt=uuid.uuid4().hex
+    def __init__(self, root, interval=1, *, baseline=None):
+        self.interval=interval; self.root=root; self.stop=threading.Event(); self.thread=None; self.attempt=uuid.uuid4().hex;self.baseline=cgroup_snapshot() if baseline is None else baseline
     def sample(self):
         status=read(self.root/'status.json')
         raw=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
@@ -144,7 +182,7 @@ class Resources:
         from memory_guard import process_tree_rss, evaluate_guard
         tree_rss=process_tree_rss(os.getpid())
         row={'attemptId':self.attempt,'processTreeSampledRssBytes':tree_rss,'time':time.time(),'stage':status.get('stage'),'pid':os.getpid(),'rssBytes':rss,'processLifetimeHwmBytes':raw if sys.platform=='darwin' else raw*1024,'cgroup':cgroup_snapshot()}
-        row['memoryEstimate']=evaluate_guard(row['cgroup'],read(ROOT/'config/cv-low-memory.json'),tree_rss=tree_rss)
+        row['memoryEstimate']=evaluate_guard(row['cgroup'],read(ROOT/'config/cv-low-memory.json'),baseline=self.baseline,tree_rss=tree_rss)
         with (self.root/'resources.ndjson').open('a',encoding='utf-8') as handle:
             handle.write(json.dumps(row)+'\n'); handle.flush()
         return row

@@ -12,6 +12,10 @@ class RuntimeMemoryTests(unittest.TestCase):
     def test_reserve_and_unknown_budget_are_distinct(self):
         cfg=core.read(core.ROOT/'config/cv-low-memory.json')
         guard=evaluate_guard(snapshot(),cfg,reserve_mib=128)
+        self.assertFalse(guard['abort']);self.assertEqual(guard['headroomBasis'],'conservative_working_set_estimate')
+        self.assertLess(guard['headroomToSkillRawCeilingBytes'],128*M)
+        self.assertGreater(guard['headroomForStageBytes'],128*M)
+        guard=evaluate_guard(snapshot(usage=790,inactive=0),cfg,reserve_mib=256)
         self.assertTrue(guard['abort']);self.assertEqual(guard['reason'],'insufficient_stage_headroom')
         self.assertFalse(evaluate_guard(snapshot(usage=840),cfg,reserve_mib=128)['abort'])
         g=evaluate_guard({'status':'unavailable'},cfg,reserve_mib=128)

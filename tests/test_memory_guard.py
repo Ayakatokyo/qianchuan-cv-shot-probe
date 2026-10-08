@@ -32,10 +32,10 @@ class MemoryGuardTests(unittest.TestCase):
         g=evaluate_guard({'status':'unavailable'},cv.config_value());self.assertFalse(g['abort']);self.assertNotIn('workingSetEstimateBytes',g)
         self.assertTrue(evaluate_guard({'status':'unavailable'},cv.config_value(),tree_rss=300*M)['abort'])
 
-    def test_missing_any_deduction_field_forces_raw_usage_v1_v2(self):
+    def test_missing_required_deduction_field_forces_raw_usage_v1_v2(self):
         cases=[snapshot(),{'status':'available','version':2,'memory.current':str(850*M),'memory.max':str(1024*M),'memory.stat':f'file {682*M}\ninactive_file {336*M}\nshmem 0\nfile_dirty 0\nfile_writeback 0'}]
         for observed in cases:
-            keys=('total_shmem','total_dirty','total_writeback') if observed['version']==1 else ('shmem','file_dirty','file_writeback')
+            keys=('total_dirty','total_writeback') if observed['version']==1 else ('shmem','file_dirty','file_writeback')
             for key in keys:
                 with self.subTest(version=observed['version'],key=key):
                     s={**observed,'memory.stat':'\n'.join(line for line in observed['memory.stat'].splitlines() if not line.startswith(key+' '))}
@@ -43,6 +43,8 @@ class MemoryGuardTests(unittest.TestCase):
                     self.assertEqual(g['inactiveFileCreditBytes'],0)
                     self.assertEqual(g['workingSetEstimateBytes'],850*M)
                     self.assertTrue(g['abort']);self.assertEqual(g['missingReclaimDeductionFields'],[key])
+        s=snapshot();s['memory.stat']='\n'.join(line for line in s['memory.stat'].splitlines() if not line.startswith('total_shmem '))
+        self.assertEqual(evaluate_guard(s,cv.config_value())['inactiveFileCreditBytes'],336*M)
     def test_hierarchical_stats_do_not_mix_local_deductions(self):
         s=snapshot();s['memory.stat']='\n'.join(line for line in s['memory.stat'].splitlines() if not line.startswith('total_writeback '))+'\nwriteback 0'
         self.assertEqual(evaluate_guard(s,cv.config_value())['inactiveFileCreditBytes'],0)

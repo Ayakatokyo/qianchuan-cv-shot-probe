@@ -5,3 +5,7 @@
 ## 0.5.4执行与交付边界补充
 
 A/B执行阶段只持久化必要输入、镜头/帧、收据和SHA绑定JSON快照；每条worker清理、结果校验与快照落盘后建议释放本次文件page cache并收集不可达Python对象。所有数据处理结束或队列因普通错误终止后，才统一流式生成一份HTML；内存保护停止或进程清理未确认时保留诊断，停止自动报告。显式审计也在全部B后进行，精确绑定各次attempt。素材导航、时间轴、代表帧、图片预算和人工质量边界保持，内部证据不作为逐条交付物。
+
+## 0.5.5高缓存基线判定证据
+
+保持报告UI与A/B/最终HTML流程，修正内存准入估算。v1原生inactive_file排除shmem，缺dirty/writeback只接受可信原生proc全局观测扣项；仅留Dirty/Writeback原两行、前后时间窗、missing和来源，避免200ms监测反复落完整meminfo增加缓存。raw95改为可靠positive credit与工作集/树预算/原reserve/currentOOM/增量failcnt/可读PSI联合复核，80/95/256数值不改。headroomToSkillRawCeilingBytes保留raw，headroomForStageBytes是95%估算余量与80%工作集余量较小值，另检查树剩余预算；未知不填0。先落状态/收据/诊断再展示失败原因，不能将估计显示为空闲内存或承诺无OOM。真实沙箱复测仍是独立验收边界。

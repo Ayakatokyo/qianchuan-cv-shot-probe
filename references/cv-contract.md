@@ -1,4 +1,16 @@
-# 0.5.4当前批量与轻量报告
+# 0.5.5当前批量与轻量报告
+
+## 0.5.5原生v1缓存与阶段准入
+
+本节是当前内存政策；下文0.3.x/0.4.x为历史实现说明，其中全部shmem/dirty/writeback必需、raw95无条件停和B128MiB基于raw余量的规则已由本节修正。
+
+v1原生file LRU排除swap-backed shmem，包含可丢弃的MADV_FREE/LazyFree页；missing shmem仍列出，不伪造0。memory.stat原文任意total_*存在即使用total口径，不能因坏total字段回落local。inactive credit只计同口径min(inactive_file,cache,usage)，扣同层dirty/writeback；缺项时可用nativeProcMeminfo的宿主全局Dirty/Writeback较大观测值保守扣除。原生proc来源需/proc/meminfo最长匹配挂载fstype=proc、mountRoot=/、无软链接/覆盖挂载，采样前后身份复核；完整meminfo严格校验单位、非负、重复与必需项，再只保存Dirty/Writeback原两行和sampleTimes，逐字段取两次max。来源/读取/解析失败无credit回退raw；两点max仅观测代理，不是区间上界保证、同层数据或free RAM。v2保持原同层三扣项及raw95规则。
+
+policyVersion=0.5.5-cache-backed-admission。80%工作集与256MiB树RSS数值保持；95%原始占用明确从v1无条件停止改为缓存压力复核。特例要求可靠正credit、working<80%、树RSS有效且<256MiB、完整同额度v1 failcnt基线无新增、当前under_oom=0、可读full PSI avg10<1且full.total无新增/回退；PSI缺失保留unknown，可由上述完整事件证据替代。实际usage>=limit永远停；无可靠credit、未知事件/树、当前OOM或新增触限仍停。共享计数/压力不能归因某素材。StageMonitor与Resources固定启动baseline，check_stage以本次观测为基线并由连续监测守后续增量。
+
+原reserve保持selection/CV128、media_probe64、RPA/download/export32MiB。headroomToSkillRawCeilingBytes原样表示95%limit-raw；headroomForStageBytes取95%余量（有credit按working，无credit按raw）和80%limit-working余量较小值，并要求processTreeHeadroomBytes=256MiB-treeRSS至少覆盖reserve。1GiB/128MiB阶段的工作集估算须≤约691.2MiB，而轻RPA32MiB可按其较小预留准入；这都是估计，不能承诺可分配容量。headroomBasis、rawCeilingExceeded、cacheBackedAdmission、reclaimDeductionBytes/Sources、unresolvedReclaimDeductionFields、nativeProcMeminfo解释每次决定；未知字段不填0。
+
+本机回归包含两个合成高缓存基线进入本地HTTP榜单/详情POST、全部3项A+B/一份HTML和拒绝边界；第一组是不同日志时点的合成参考，第二组保留已有raw/cache/inactive/rss/failcnt数值，新增proc Dirty/Writeback/under_oom为synthetic证据。不能把旧缺失证据快照称为获准，不替代Linux1GiB平台复测、峰值/OOM及人工镜头质量验收。约200ms采样不能拦截所有瞬时峰值。
 
 ## 0.5.4逐条释放与最终统一报告
 

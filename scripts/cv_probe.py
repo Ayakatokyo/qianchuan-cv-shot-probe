@@ -176,7 +176,7 @@ def probe_cv(root,*,attempt_id=None,config_file=None,backend=None,_defer_report=
         write(attempt/'status.json',{'status':'running','stage':'cv_precheck','pid':os.getpid(),'attemptId':attempt_id})
         release_completed(root,'cv_precheck')
         before=cgroup_snapshot();process=None;error=None;cleanup={'status':'not_started'};started=time.monotonic()
-        with Resources(attempt):
+        with Resources(attempt,baseline=before):
             try:
                 guard=evaluate_guard(before,config,baseline=before,tree_rss=process_tree_rss(os.getpid()),reserve_mib=policy()['stageReserveMiB']['cv_precheck'])
                 write(attempt/'memory-admission.json',guard)

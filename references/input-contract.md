@@ -1,4 +1,8 @@
-# 0.5.4当前输入与交付契约
+# 0.5.5当前输入与交付契约
+
+## 0.5.5阶段内存准入
+
+当前内存政策见cv-contract.md的0.5.5节。v1缺shmem不虚构0，缺dirty/writeback仅用可信原生proc两次全局观测保守扣除；失败回退raw。95%从v1无条件停改缓存压力复核，80%工作集/256MiB树/各阶段reserve数值保持。阶段余量取95%余量与80%工作集余量较小值且树剩余预算覆盖reserve，轻RPA32MiB与选择/CV128MiB分别判定；actual used>=limit、当前OOM、新事件、不可靠高raw仍拒绝。phase-memory保留原raw余量、headroomForStageBytes/headroomBasis、cacheBackedAdmission、来源/两行proc原文/时间/missing，未知不填0；两点观测和200ms采样不是整个区间或瞬时OOM保证。
 
 ## 0.5.4逐条释放与最终统一报告
 

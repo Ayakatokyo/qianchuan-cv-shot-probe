@@ -182,10 +182,10 @@ class CvTests(unittest.TestCase):
         with patch.dict('os.environ',{'IMAGEIO_FFMPEG_EXE':str(wrapper)}):result=cv.probe_cv(self.root,attempt_id='no-filter')
         self.assertEqual(result['status'],'failed');self.assertEqual(core.read(self.root/'cv/no-filter/status.json')['errorCode'],'ffmpeg_scdet_unavailable')
 
-    def test_cv_reserve_blocks_below_raw_stop_and_no_second_media_probe(self):
+    def test_cv_reserve_blocks_near_working_ceiling_and_no_second_media_probe(self):
         self.acquire()
         from test_memory_guard import snapshot
-        with patch.object(cv,'cgroup_snapshot',return_value=snapshot(usage=850)):
+        with patch.object(cv,'cgroup_snapshot',return_value=snapshot(usage=850,inactive=150)):
             result=cv.probe_cv(self.root,attempt_id='reserve-block')
         self.assertEqual(result['status'],'failed')
         guard=core.read(self.root/'cv/reserve-block/memory-guard.json')

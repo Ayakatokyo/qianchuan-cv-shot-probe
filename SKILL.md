@@ -5,9 +5,15 @@ metadata:
   argument_hint: 选择授权账号、日期、素材数量和筛选条件，一次提问完成分镜。
 ---
 
-# 千川视频CV分镜工作台（0.5.4）
+# 千川视频CV分镜工作台（0.5.5）
 
 默认先全部A、再串行B：一次查询素材榜单，按筛选排序选择1–10条不同素材，先每批最多3条提交详情RPA，收齐本批CSV并核对身份/周期，再串行下载视频；所有选中素材的A输入就绪后，再按原顺序逐个执行低内存CV分镜并确认进程清理。只交付一份可视化HTML。音频转写、脚本时间码对齐和宿主AI二次分析后置。
+
+## 0.5.5高缓存基线准入
+
+v1原生inactive_file不含shmem；missing shmem原样保留，不填0。缺同层dirty/writeback时只读可信原生/proc/meminfo，以两次Dirty/Writeback较大观测值作全局保守扣除代理；保留原两行及时间窗、来源和missing清单，不混total/local，不称free RAM。非原生proc、覆盖挂载、软链接、权限/单位/负值/重复字段或解析失败都回退raw，不清全局缓存。
+
+95%原始占用从无条件停改为v1缓存压力复核：可靠正抵扣、working<80%、本次树RSS已知且低于256MiB、有原阶段预留、有效baseline failcnt无增量及current under_oom=0、可读full PSI无显著值/新增阻塞才准入；PSI缺失记unknown，允许上述完整v1事件证据替代。真实used>=limit始终停；v2/不可靠高raw继续95%停。80/95/256和各reserve数值保持，阶段估算取95%余量与80%工作集停止线余量较小值，再要求树剩余预算覆盖reserve；1GiB、128MiB阶段须working不超过约691.2MiB。headroomToSkillRawCeilingBytes仍raw，headroomForStageBytes/headroomBasis/cacheBackedAdmission明确不同口径。两个非原子采样点及约200ms监测不能保证全时间窗或避免瞬时OOM；本地synthetic HTTP回归不代表真实平台验收。
 
 ## 0.5.4逐条释放与最终统一报告
 
@@ -73,6 +79,6 @@ python "$SKILL_ROOT/scripts/run.py" probe-cv-batch --manifest-file "$WORKSPACE_R
 
 源视频尺寸规则见config/media-input-policy.json：长边≤1936（1920+16），总像素≤3,686,400；允许1080×1922等小幅尺寸偏差，不放大原1920×1920最大面积。时长≤180秒、帧率≤60fps、文件≤128MiB保持。原始视频与SHA保留，CV仍缩放最大边320。尺寸容差仅用于资源准入，不用于CSV/媒体身份比较；超限保持media_input_limit，media/probe.json和失败报告记录实际值、上限及未执行身份比较的状态。
 
-不安装NumPy/OpenCV/PySceneDetect等重型CV依赖；仅明确算法对照才binary-only安装requirements-cv.txt并显式adaptive。默认FFmpeg单线程、最大边320、原PTS、每镜头代表帧、最多300镜头，超限/缺帧失败不整段回退。工作集80%、原始占用95%、进程树256MiB以及压力/事件保护保持；扣减shmem/dirty/writeback任一同层字段缺失则raw保守回退，额度/压力不可读保持未知。阶段余量见config/memory-policy.json。
+不安装NumPy/OpenCV/PySceneDetect等重型CV依赖；仅明确算法对照才binary-only安装requirements-cv.txt并显式adaptive。默认FFmpeg单线程、最大边320、原PTS、每镜头代表帧、最多300镜头，超限/缺帧失败不整段回退。现行内存准入按前述0.5.5节：80/95/256数值保持，v1原始95%语义改缓存压力复核，缺扣项只能按可靠原生proc证据保守估算，否则raw回退；额度/压力不可读保持未知。阶段预留数值见config/memory-policy.json，余量同时受80%工作集线和树剩余预算约束。
 
 采样约200ms仍可能漏瞬时峰值，不保证绝不OOM。只有本次完成的显式普通文件尝试fsync/DONTNEED建议，不删源文件、不清全局缓存，不承诺腾出指定内存。批量选材源通过硬链接共享，不复制大榜单，绑定请求/源/每条选择，源变化会使所有依赖输入校验失败。三次稳定性、真实多素材及人工质量仍需平台证据；本地合成和HTML重绘不等于平台验收。详见[CV契约](references/cv-contract.md)。
