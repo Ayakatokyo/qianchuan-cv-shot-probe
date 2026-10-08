@@ -59,7 +59,7 @@ def zip_bounded(path, root, monitor):
                     dst.write(chunk)
 
 
-def export_report(root,destination,*,expected_attempt=None):
+def export_report(root,destination,*,expected_attempt=None,_report_snapshot=None):
     root=Path(root);destination=Path(destination)
     archive=destination.with_name(destination.name+'.zip')
     evidence=destination.with_name(destination.name+'.memory')
@@ -77,20 +77,34 @@ def export_report(root,destination,*,expected_attempt=None):
             scratch=Path(tempfile.mkdtemp(prefix='.report-export-',dir=destination.parent))
             fd,tmpzip=tempfile.mkstemp(prefix='.report-bundle-',suffix='.zip',dir=destination.parent);os.close(fd)
             monitor.checkpoint('export_render')
-            report(root);public=read(root/'report/report.json')
+            if _report_snapshot is None:
+                report(root);public=read(root/'report/report.json')
+            else:
+                from visual_report import load_public, write_visual
+                from probe_core import verify
+                verify(root)
+                if not isinstance(_report_snapshot,dict) or not _report_snapshot.get('reportSnapshotSha256'):
+                    raise ProbeError('report_snapshot_invalid')
+                snapshot=Path(_report_snapshot['reportSnapshot'])
+                if digest(snapshot/'report/report.json')!=_report_snapshot['reportSnapshotSha256']:raise ProbeError('report_snapshot_changed')
+                public,frame_root=load_public(snapshot,expected_attempt,root)
+                write(scratch/'report/report.json',public)
+                write_visual(scratch/'report/index.html',[(public,frame_root)],monitor=monitor)
+                write(scratch/'report/receipt.json',{'artifacts':[artifact(scratch/'report/report.json',scratch),artifact(scratch/'report/index.html',scratch)]})
             if expected_attempt is not None and public.get('cv',{}).get('attemptId')!=expected_attempt:
                 raise ProbeError('delivery_cv_attempt_changed')
             monitor.checkpoint('export_copy')
-            for relative in ('report/index.html','report/report.json','report/receipt.json','resources.ndjson'):
+            relatives=('report/index.html','report/report.json','report/receipt.json','resources.ndjson') if _report_snapshot is None else ('resources.ndjson',)
+            for relative in relatives:
                 copy_bounded(safe_file(root,relative),scratch/relative,monitor)
             if public.get('videoPath'):
                 relative='media/source-video.mp4';src=safe_file(root,relative)
-                if artifact(src,root)!=public['videoArtifact']:raise ProbeError('artifact_changed')
+                if artifact(src,root,cache_stage='export_video_hash')!=public['videoArtifact']:raise ProbeError('artifact_changed')
                 monitor.check();copy_bounded(src,scratch/relative,monitor)
             cv=public.get('cv',{})
             if cv.get('attemptId'):
                 prefix='cv/'+cv['attemptId']+'/'
-                selected=['config.json','resources.ndjson','shots.json','status.json','receipt.json','worker-environment.json','boundaries.ndjson','supervisor-failure.json','worker-failure.json','memory-guard.json','memory-admission.json','guard-samples.ndjson']+[s['frameRef'] for s in cv.get('shots',[]) if s['representativeStatus']=='available']
+                selected=['config.json','resources.ndjson','shots.json','status.json','receipt.json','worker-environment.json','boundaries.ndjson','supervisor-failure.json','worker-failure.json','memory-guard.json','memory-admission.json','guard-samples.ndjson','cache-advice.ndjson']+[s['frameRef'] for s in cv.get('shots',[]) if s['representativeStatus']=='available']
                 for relative in selected:
                     if (root/prefix/relative).exists():copy_bounded(safe_file(root,prefix+relative),scratch/prefix/relative,monitor)
             for relative in ('phase-memory.ndjson','phase-memory.json','cache-advice.ndjson'):

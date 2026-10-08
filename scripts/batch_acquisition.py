@@ -3,7 +3,7 @@ from pathlib import Path
 import uuid
 from probe_core import (ROOT, ProbeError, Gateway, acquire, external_root, read, write,
                         artifact, safe_file, digest, fingerprint, resource_summary, safe_error)
-from runtime_memory import StageMonitor, check_stage, release_completed
+from runtime_memory import StageMonitor, check_stage, release_completed, release_item
 
 
 RPA_CONCURRENCY = 3
@@ -38,7 +38,7 @@ def acquire_waves(normalized, selected, source, source_ref, queue, queue_sha, re
                   'binding':{'batchId':result['batchId'],'index':entry['index'],'queueSha256':queue_sha,
                              'requestSha256':queue['requestSha256'],'source':source_ref,'selectedMaterialSha256':fingerprint({'material':material,'params':params})}}
             try:
-                submitted=acquire(normalized,root,gateway_factory=gateway_factory,adapter=adapter,selection_seed=seed,_rpa_phase='submit',_operation_check=monitor.check)
+                submitted=acquire(normalized,root,gateway_factory=gateway_factory,adapter=adapter,selection_seed=seed,_rpa_phase='submit',_operation_check=monitor.check,_defer_report=True)
                 entry.update(status='pending',acquisitionStatus='submitted',rpaStatus='submitted',taskId=submitted['taskId'])
                 result['rpaSubmissionCount']+=1;save()
             except Exception as exc:
@@ -50,7 +50,7 @@ def acquire_waves(normalized, selected, source, source_ref, queue, queue_sha, re
             monitor.checkpoint('batch_collect_'+str(entry['index']))
             entry['status']='running';save()
             try:
-                acquire(normalized,Path(entry['runDir']),resume=True,gateway_factory=gateway_factory,adapter=adapter,_rpa_phase='collect',_operation_check=monitor.check)
+                acquire(normalized,Path(entry['runDir']),resume=True,gateway_factory=gateway_factory,adapter=adapter,_rpa_phase='collect',_operation_check=monitor.check,_defer_report=True)
                 entry.update(status='pending',acquisitionStatus='csv_ready',rpaStatus='csv_ready')
             except Exception as exc:
                 fail(entry,exc);errors.append((entry['index'],exc))
@@ -74,7 +74,7 @@ def acquire_waves(normalized, selected, source, source_ref, queue, queue_sha, re
             entry['status']='running';save()
             try:
                 root=Path(entry['runDir'])
-                acquire(normalized,root,resume=True,gateway_factory=gateway_factory,adapter=adapter,_rpa_phase='media',_operation_check=monitor.check)
+                acquire(normalized,root,resume=True,gateway_factory=gateway_factory,adapter=adapter,_rpa_phase='media',_operation_check=monitor.check,_defer_report=True)
                 entry.update(status='pending',acquisitionStatus='video_ready')
                 result['acquiredCount']+=1;release_completed(root,'batch_acquisition_complete');save()
                 monitor.checkpoint('batch_acquisition_complete_'+str(entry['index']))
@@ -99,7 +99,7 @@ def run_batch(request, output, *, gateway_factory=Gateway):
     gateway=None;monitor=StageMonitor(output,'batch_selection')
     try:
         from cv_probe import probe_cv
-        from visual_report import export_batch_html
+        from visual_report import export_batch_html, snapshot_report
         with monitor:
             check_stage(selection_root,'selection')
             gateway=gateway_factory(selection_root)
@@ -123,6 +123,9 @@ def run_batch(request, output, *, gateway_factory=Gateway):
             gateway=None
             result['stage']='acquisition';write(output/'batch.json',result)
             acquire_waves(normalized,selected,source,source_ref,queue,queue_sha,result,output,gateway_factory,adapter,monitor)
+            # B only needs the bound entries; complete material dictionaries stay on disk.
+            del selected,queue
+            release_item(output,'batch_acquisition_barrier')
             # Phase barrier: no CV is launched until every selected input is ready.
             result['stage']='cv';write(output/'batch.json',result)
             monitor.checkpoint('batch_all_acquisitions_complete')
@@ -131,7 +134,8 @@ def run_batch(request, output, *, gateway_factory=Gateway):
                 entry.update(status='running',cvStatus='running');write(output/'batch.json',result)
                 monitor.checkpoint('batch_B_'+str(entry['index']))
                 attempt=result['batchId']+'-'+str(entry['index']);entry['attemptId']=attempt
-                probe_cv(root,attempt_id=attempt,backend='ffmpeg-scene')
+                write(output/'batch.json',result)
+                probe_cv(root,attempt_id=attempt,backend='ffmpeg-scene',_defer_report=True)
                 receipt=read(root/'cv'/attempt/'receipt.json')
                 entry.update(cvStatus=receipt['status'],inputVideoSha256=receipt['inputVideoSha256'],
                              workerExitCode=receipt['workerExitCode'],processCleanup=receipt['processCleanup'])
@@ -139,10 +143,13 @@ def run_batch(request, output, *, gateway_factory=Gateway):
                 if receipt['processCleanup']['status']!='completed':raise ProbeError('process_cleanup_unconfirmed')
                 entry['status']='succeeded';result['completedCount']+=1
                 entry['memoryObservation']=resource_summary(root/'cv'/attempt)
-                release_completed(root,'batch_item_complete')
+                snapshot=output/'snapshots'/('item-'+str(entry['index']))
+                entry.update(snapshot_report(root,snapshot,expected_attempt=attempt))
+                write(output/'batch.json',result)
+                release_item(root,'batch_item_complete',attempt_id=attempt,report_root=snapshot)
                 monitor.checkpoint('batch_item_complete_'+str(entry['index']))
                 write(output/'batch.json',result)
-            result['status']='succeeded' if len(selected)==count else 'partial'
+            result['status']='succeeded' if result['selectedCount']==count else 'partial'
             write(output/'batch.json',result)
             result['stage']='delivery';write(output/'batch.json',result)
             monitor.checkpoint('batch_html')
@@ -151,6 +158,15 @@ def run_batch(request, output, *, gateway_factory=Gateway):
         result['stage']='complete'
     except Exception as exc:
         result.update(status='failed',errorCode=getattr(exc,'code','batch_failed'),message=safe_error(exc))
+        guard_stopped=result['errorCode'] in ('operation_memory_guard_aborted','memory_guard_aborted','insufficient_headroom','insufficient_stage_headroom')
+        if guard_stopped:
+            result.update(guardStopReason=result['errorCode'],guardStopOrigin='phase_admission' if result['errorCode']=='insufficient_stage_headroom' else 'failure_code')
+            for entry in result['entries']:
+                if entry.get('attemptId') and entry.get('runDir'):
+                    guard_path=Path(entry['runDir'])/'cv'/entry['attemptId']/'memory-guard.json'
+                    if guard_path.exists():
+                        guard=read(guard_path)
+                        if guard.get('abort'):result.update(guardStopReason=guard.get('reason') or result['errorCode'],guardStopOrigin='cv_attempt_guard')
         gate=result.get('firstBatchCsvGate',{})
         if gate.get('status')=='pending':gate.update(status='unconfirmed',errorCode=result['errorCode'])
         waves=result.get('rpaWaves',[])
@@ -161,8 +177,13 @@ def run_batch(request, output, *, gateway_factory=Gateway):
                 if entry['acquisitionStatus']=='running':entry['acquisitionStatus']='failed'
                 if entry['cvStatus']=='running':entry['cvStatus']='failed'
         # Preserve completed work; a safe compact report can still describe partial results.
-        if monitor.failure is None:
+        if monitor.failure is None and not guard_stopped and result['errorCode']!='process_cleanup_unconfirmed':
             try:
+                for entry in result['entries']:
+                    if entry.get('runDir') and not entry.get('reportSnapshot'):
+                        root=Path(entry['runDir']);snapshot=output/'snapshots'/('item-'+str(entry['index']))
+                        entry.update(snapshot_report(root,snapshot,entry=entry))
+                        release_item(root,'batch_stopped_item',report_root=snapshot)
                 write(output/'batch.json',result)
                 result['report']=export_batch_html(output,output/'index.html')
             except Exception as report_exc:result['reportErrorCode']=getattr(report_exc,'code','report_failed')
@@ -170,7 +191,9 @@ def run_batch(request, output, *, gateway_factory=Gateway):
         session=getattr(gateway,'session',None)
         if session is not None and hasattr(session,'close'):session.close()
         result['distinctVideoCount']=len({e['inputVideoSha256'] for e in result['entries'] if e.get('inputVideoSha256')})
-        result['guardStopReason']=monitor.failure;result['memoryObservation']=resource_summary(output)
+        result['guardStopReason']=monitor.failure or result.get('guardStopReason')
+        if monitor.failure:result['guardStopOrigin']='queue_monitor'
+        result['memoryObservation']=resource_summary(output)
         write(output/'status.json',{'status':result['status'],'stage':result['stage'],'errorCode':result.get('errorCode')})
         write(output/'batch.json',result)
     return result

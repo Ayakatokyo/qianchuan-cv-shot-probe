@@ -129,7 +129,7 @@ def run(job):
     binary=subprocess.run([ffmpeg,'-version'],capture_output=True,text=True,timeout=10)
     if binary.returncode:raise ProbeError('ffmpeg_unavailable')
     write(root/'worker-environment.json',{'dependencies':packages,'cv2Threads':cv2.getNumThreads(),'ffmpegVersion':binary.stdout.splitlines()[0],'ffmpegSha256':digest(ffmpeg),'threadEnvironment':{k:os.environ.get(k) for k in ('OMP_NUM_THREADS','OPENBLAS_NUM_THREADS','MKL_NUM_THREADS','VECLIB_MAXIMUM_THREADS','NUMEXPR_NUM_THREADS')}})
-    if digest(video)!=job['videoSha256']:raise ProbeError('artifact_changed')
+    if __import__('runtime_memory').digest_owned(video,owner_root=video.parent,log_root=root,stage='worker_input_hash')!=job['videoSha256']:raise ProbeError('artifact_changed')
     detector=AdaptiveDetector(adaptive_threshold=config['adaptiveThreshold'],window_width=config['windowWidth'],min_content_val=config['minContentVal'],min_scene_len=max(1,math.ceil(job['media']['fps']*config['minShotSec'])))
     state(root,'cv_decode_detect')
     decoded=decode(video,root,config,ffmpeg,job['media'],cv2,np,detector)

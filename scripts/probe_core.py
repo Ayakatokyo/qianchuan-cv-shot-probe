@@ -62,9 +62,13 @@ def digest(path):
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 
-def artifact(path, root):
+def artifact(path, root, *, cache_stage=None, log_root=None):
     path = Path(path)
-    return {'path':path.relative_to(root).as_posix(), 'sha256':digest(path), 'sizeBytes':path.stat().st_size}
+    if cache_stage is None:sha=digest(path)
+    else:
+        from runtime_memory import digest_owned
+        sha=digest_owned(path,owner_root=root,log_root=log_root or root,stage=cache_stage)
+    return {'path':path.relative_to(root).as_posix(), 'sha256':sha, 'sizeBytes':path.stat().st_size}
 
 def safe_file(root, relative):
     path = Path(root)/relative
@@ -339,7 +343,8 @@ def verify(root):
     if receipt.get('requestSha256')!=digest(root/'request.json'):raise ProbeError('request_changed')
     for item in receipt['artifacts']:
         path=safe_file(root,item['path'])
-        if path.stat().st_size!=item['sizeBytes'] or digest(path)!=item['sha256']:raise ProbeError('artifact_changed')
+        stage='verify_input_hash' if path.suffix in ('.csv','.jsonl','.mp4') else None
+        if artifact(path,root,cache_stage=stage)!=item:raise ProbeError('artifact_changed')
     return receipt
 
 def resource_summary(root):
@@ -418,7 +423,7 @@ def compare_media(expected,media):
     return {'status':'matched' if all(c['matched'] for c in comparisons) else 'mismatch',
             'comparisons':comparisons,'note':'媒体参数仅辅助核对，素材身份由CSV及视频来源链校验。'}
 
-def report(root):
+def report(root, *, render_html=True):
     state=read(root/'status.json')
     receipt=read(root/'acquisition/receipt.json') if (root/'acquisition/receipt.json').exists() else None
     if state.get('status')=='video_ready':verify(root)
@@ -430,7 +435,7 @@ def report(root):
         if state.get('status')=='video_ready':
             confirmed=next(a for a in receipt['artifacts'] if a['path']=='media/source-video.mp4')
             if candidate==confirmed:video_ref=candidate
-        elif artifact(video,root)==candidate:video_ref=candidate
+        elif artifact(video,root,cache_stage='report_video_hash')==candidate:video_ref=candidate
     media=receipt.get('media') if receipt else (observed.get('media') if video_ref and observed.get('videoSha256')==video_ref['sha256'] else None)
     public={'stage':'A_acquisition','status':state['status'],'failureStage':state.get('stage') if state['status']=='failed' else None,
             'errorCode':state.get('errorCode'),'errorMessage':read(root/'failure.json').get('message') if state['status']=='failed' and (root/'failure.json').exists() else None,'platform':read(ROOT/'config/platform.json')['platform'],
@@ -459,12 +464,16 @@ def report(root):
         if cv['status']=='succeeded':verify_cv(root)
     target=root/'report';target.mkdir(exist_ok=True)
     write(target/'report.json',public)
-    from visual_report import write_visual
-    write_visual(target/'index.html',[(public,root/'cv'/cv['attemptId'] if cv.get('attemptId') else None)])
-    write(target/'receipt.json',{'artifacts':[artifact(target/'index.html',root),artifact(target/'report.json',root)]})
-    return {'status':public['status'],'reportPath':str(target/'index.html'),'cvStatus':cv['status']}
+    artifacts=[artifact(target/'report.json',root)]
+    result={'status':public['status'],'reportJsonPath':str(target/'report.json'),'cvStatus':cv['status']}
+    if render_html:
+        from visual_report import write_visual
+        write_visual(target/'index.html',[(public,root/'cv'/cv['attemptId'] if cv.get('attemptId') else None)])
+        artifacts.append(artifact(target/'index.html',root));result['reportPath']=str(target/'index.html')
+    write(target/'receipt.json',{'artifacts':artifacts})
+    return result
 
-def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,media_probe=probe_media,selection_seed=None,_rpa_phase='complete',_operation_check=None):
+def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,media_probe=probe_media,selection_seed=None,_rpa_phase='complete',_operation_check=None,_defer_report=False):
     if _rpa_phase not in ('complete','submit','collect','media'):raise ProbeError('rpa_phase_invalid')
     if _rpa_phase=='submit' and (resume or selection_seed is None):raise ProbeError('rpa_phase_invalid')
     if _rpa_phase in ('collect','media') and not resume:raise ProbeError('rpa_phase_invalid')
@@ -481,7 +490,9 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
             saved=read(root/'request.json')
             if fingerprint(saved)!=fingerprint(normalized):raise ProbeError('request_changed')
             state=read(root/'status.json')
-            if state.get('status')=='video_ready':verify(root);return report(root)
+            if state.get('status')=='video_ready':
+                verify(root)
+                return {'status':'video_ready','stage':'A_acquisition'} if _defer_report else report(root)
             if state.get('firstBatchCsvGate',{}).get('status')=='blocked':raise ProbeError('rpa_paused')
         else:
             write(root/'request.json',normalized)
@@ -533,17 +544,17 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                 csv_path=gateway.csv('detail',adapter.DETAIL_CODE,params,normalized['rpa_shop'],require_existing=_rpa_phase in ('collect','media'),stop_check=_operation_check)
                 transition(root,'detail_csv_validation')
                 accepted=root/'acquisition/csv-receipt.json'
-                if accepted.exists() and artifact(csv_path,root)!=read(accepted):raise ProbeError('accepted_csv_changed')
+                if accepted.exists() and artifact(csv_path,root,cache_stage='csv_input_hash')!=read(accepted):raise ProbeError('accepted_csv_changed')
                 try:
                     evidence=adapter.video_source(csv_path,material,params)
                 except Exception as exc:
                     if getattr(exc,'code','').startswith('video_url_'):
-                        write(accepted,artifact(csv_path,root))
+                        write(accepted,artifact(csv_path,root,cache_stage='csv_input_hash'))
                         transition(root,'video_source','failed',errorCode=exc.code,firstBatchCsvGate={'status':'passed'})
                         raise
                     transition(root,'detail_csv_validation','failed',errorCode='first_batch_no_valid_csv',firstBatchCsvGate={'status':'blocked'})
                     raise ProbeError('first_batch_no_valid_csv') from exc
-                write(accepted,artifact(csv_path,root))
+                write(accepted,artifact(csv_path,root,cache_stage='csv_input_hash'))
                 write(root/'acquisition/source.json',evidence)
                 if _rpa_phase=='collect':
                     transition(root,'detail_csv_validation','csv_ready',firstBatchCsvGate={'status':'passed'})
@@ -554,7 +565,7 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                 video=root/'media/source-video.mp4'
                 if video.exists():
                     prior=read(root/'media/download-receipt.json')
-                    if digest(video)!=prior['sha256']:raise ProbeError('artifact_changed')
+                    if __import__('runtime_memory').digest_owned(video,owner_root=root,log_root=root,stage='resume_video_hash')!=prior['sha256']:raise ProbeError('artifact_changed')
                 else:
                     download(evidence['url'],video,max_bytes=VIDEO_LIMIT,receipt_path=root/'media/download-receipt.json',receipt_root=root,stop_check=_operation_check)
                 transition(root,'media_probe')
@@ -572,7 +583,7 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                 validation=compare_media(evidence.get('expectedMedia',{}),media)
                 write(root/'media/probe.json',{'videoSha256':read(root/'media/download-receipt.json')['sha256'],'media':media,'admission':admission,'validation':validation})
                 if validation['status']!='matched':raise ProbeError('video_identity_mismatch')
-                artifacts=[artifact(p,root) for p in sorted((root/'acquisition').glob('*.csv'))]+[artifact(root/'acquisition/selection-source.json',root)]
+                artifacts=[artifact(p,root,cache_stage='csv_receipt_hash') for p in sorted((root/'acquisition').glob('*.csv'))]+[artifact(root/'acquisition/selection-source.json',root)]
                 source_ref=read(root/'acquisition/selection-source.json');artifacts.append(artifact(safe_file(root,source_ref['path']),root))
                 artifacts+=[artifact(root/'acquisition/selection.json',root),artifact(root/'acquisition/source.json',root),artifact(accepted,root),read(root/'media/download-receipt.json'),artifact(root/'media/download-receipt.json',root),artifact(root/'media/probe.json',root)]
                 artifacts.append(artifact(binding,root))
@@ -589,13 +600,13 @@ def acquire(request,root,*,resume=False,gateway_factory=Gateway,adapter=None,med
                     transition(root,state['stage'],'failed',errorCode='first_batch_no_valid_csv',firstBatchCsvGate={'status':'blocked'})
                 else:transition(root,state['stage'],'paused' if code=='insufficient_stage_headroom' else 'failed',errorCode=code)
                 resources.sample()
-                report(root)
+                if not _defer_report:report(root)
                 raise
             finally:
                 session=getattr(gateway,'session',None)
                 if session is not None and hasattr(session,'close'):session.close()
                 release_completed(root,'acquisition_exit')
-        result=report(root)
+        result={'status':read(root/'status.json')['status'],'stage':'A_acquisition'} if _defer_report else report(root)
         release_completed(root,'report_complete')
         return result
 

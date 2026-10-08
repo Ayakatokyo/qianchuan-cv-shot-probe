@@ -2,6 +2,8 @@
 These are Skill policies; no sandbox limits or global caches are changed.
 """
 import json
+import gc
+import hashlib
 import os
 from pathlib import Path
 import stat
@@ -58,7 +60,8 @@ def release_owned(log_root, stage, owner_root, paths):
     result={'stage':stage,'policyOrigin':'skill','supported':hasattr(os,'posix_fadvise') and hasattr(os,'POSIX_FADV_DONTNEED'),
             'attemptedFiles':0,'advisedBytes':0,'errors':[], 'before':before,
             'effect':'advisory_only_not_guaranteed_reclaim'}
-    if result['supported']:
+    if owner.is_symlink():result['ownerRejected']='symlink_owner'
+    if result['supported'] and not owner.is_symlink():
         for original in dict.fromkeys(Path(p).absolute() for p in paths):
             if not original.is_relative_to(owner):continue
             relative=original.relative_to(owner)
@@ -82,6 +85,83 @@ def release_owned(log_root, stage, owner_root, paths):
     result['after']=cgroup_snapshot()
     append_event(log_root,'cache-advice.ndjson',result)
     return result
+
+
+def release_item(root, stage, *, attempt_id=None, report_root=None):
+    """Release only this completed item's inputs, bound CV attempt and snapshot.
+    Worker exit releases its native allocations. GC only collects unreachable
+    Python objects; neither operation promises a decrease in shared cgroup use.
+    """
+    from probe_core import safe_file, read, ProbeError
+    root=Path(root)
+    results=[release_completed(root,stage+'_inputs')]
+    if attempt_id is not None:
+        attempt=safe_file(root,'cv/'+attempt_id+'/receipt.json').parent
+        receipt=read(attempt/'receipt.json')
+        if receipt.get('processCleanup',{}).get('status') not in ('completed','not_started'):
+            raise ProbeError('process_cleanup_unconfirmed')
+        paths=[attempt/item['path'] for item in receipt.get('artifacts',[])]+[attempt/'receipt.json']
+        results.append(release_owned(root,stage+'_cv',attempt,paths))
+    if report_root is not None:
+        results.append(release_owned(root,stage+'_report',root,[root/'report/report.json',root/'report/receipt.json']))
+        owner=Path(report_root)
+        results.append(release_owned(root,stage+'_snapshot',owner,[owner/'report/report.json',owner/'report/receipt.json']))
+    collected=gc.collect()
+    append_event(root,'cache-advice.ndjson',{'stage':stage+'_python','policyOrigin':'skill','collectedObjects':collected,
+                 'effect':'unreachable_objects_only_not_guaranteed_anon_reclaim'})
+    return {'cacheAdvice':results,'collectedObjects':collected}
+
+
+def digest_owned(path, *, owner_root, log_root, stage, chunk_bytes=1024*1024):
+    """Full SHA with best-effort read-page advice for closed owned input files."""
+    from probe_core import cgroup_snapshot, ProbeError
+    owner=Path(owner_root).absolute();path=Path(path).absolute()
+    try:relative=path.relative_to(owner)
+    except ValueError:raise ProbeError('unsafe_artifact_path')
+    if '..' in relative.parts or any((owner/Path(*relative.parts[:i])).is_symlink() for i in range(len(relative.parts)+1)):
+        raise ProbeError('unsafe_artifact_path')
+    page_size=os.sysconf('SC_PAGE_SIZE') if hasattr(os,'sysconf') else 4096
+    if chunk_bytes<=0 or chunk_bytes%page_size:raise ProbeError('hash_chunk_alignment_invalid')
+    supported=hasattr(os,'posix_fadvise') and hasattr(os,'POSIX_FADV_DONTNEED')
+    observation={'stage':stage,'policyOrigin':'skill','path':relative.as_posix(),'supported':supported,
+                 'operation':'owned_input_sha256','readBytes':0,'hashedBytes':0,'advisedBytes':0,'errors':[],'before':cgroup_snapshot(),
+                 'effect':'advisory_only_not_guaranteed_reclaim','hashCoverage':'all_bytes'}
+    sha=hashlib.sha256();fd=None
+    try:
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):raise ProbeError('artifact_missing')
+        initial=(info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)
+        observation['initialStat']={'dev':initial[0],'ino':initial[1],'sizeBytes':initial[2],'mtimeNs':initial[3]}
+        if supported:
+            try:os.fsync(fd)
+            except OSError as exc:observation['errors'].append({'operation':'fsync','errno':exc.errno});supported=False
+        with os.fdopen(fd,'rb') as handle:
+            fd=None;offset=0;advice_offset=0
+            while True:
+                chunk=handle.read(chunk_bytes)
+                if not chunk:break
+                sha.update(chunk);observation['readBytes']+=len(chunk);observation['hashedBytes']+=len(chunk)
+                aligned_end=((offset+len(chunk))//page_size)*page_size
+                if supported and aligned_end>advice_offset:
+                    try:
+                        os.posix_fadvise(handle.fileno(),advice_offset,aligned_end-advice_offset,os.POSIX_FADV_DONTNEED)
+                        observation['advisedBytes']+=aligned_end-advice_offset;advice_offset=aligned_end
+                    except OSError as exc:
+                        observation['errors'].append({'operation':'chunk_advice','errno':exc.errno});supported=False
+                offset+=len(chunk)
+            final_info=os.fstat(handle.fileno());current=path.lstat()
+            final=(final_info.st_dev,final_info.st_ino,final_info.st_size,final_info.st_mtime_ns)
+            observation['finalStat']={'dev':final[0],'ino':final[1],'sizeBytes':final[2],'mtimeNs':final[3]}
+            if final!=initial or (current.st_dev,current.st_ino,current.st_size,current.st_mtime_ns)!=initial or observation['hashedBytes']!=initial[2]:
+                raise ProbeError('artifact_changed')
+            if supported:
+                try:os.posix_fadvise(handle.fileno(),0,0,os.POSIX_FADV_DONTNEED)
+                except OSError as exc:observation['errors'].append({'operation':'eof_advice','errno':exc.errno})
+        observation['sha256']=sha.hexdigest();return observation['sha256']
+    finally:
+        if fd is not None:os.close(fd)
+        observation['after']=cgroup_snapshot();append_event(log_root,'cache-advice.ndjson',observation)
 
 
 class StageMonitor:

@@ -1,4 +1,12 @@
-# 0.5.3当前批量与轻量报告
+# 0.5.4当前批量与轻量报告
+
+## 0.5.4逐条释放与最终统一报告
+
+批量A与B阶段仅落盘恢复/校验必需的输入、任务状态、CV镜头/帧、资源观察和收据，不生成逐条index.html或交付ZIP。每条B确认worker及子进程清理，校验结果并保存绑定本次attempt和SHA的JSON快照后，释放本次输入/代表帧/日志/快照文件的page cache建议并执行Python垃圾回收，再启动下一条；A结束后不再保留完整选材字典。失败停队列后可统一汇总已完成、失败和pending，内存守卫或清理未确认时停止自动报告尝试。
+
+完整SHA核验保持：对已关闭的本次CSV/JSONL/MP4，分块读完即对已消费的整页作DONTNEED建议，读前仅一次fsync，EOF补充建议；保存完整字节数、SHA、初末文件身份/大小/修改时间与前后cgroup观察。文件变化仍拒绝，不省略身份/输入哈希；FFmpeg二进制、脚本和系统共享依赖走普通SHA，不对其缓存作建议。worker进程退出释放自身原生分配；gc.collect只处理不可达Python对象，DONTNEED为建议，两者均不保证共享沙箱占用下降或避免瞬时OOM。
+
+全队列终止后才生成一份自包含HTML。最终渲染两遍读取绑定快照：首遍只保留小型导航/计数，第二遍逐条核验镜头和代表帧并流式写入，每条/每帧用后释放；图片上限仍单张256KiB、全报告12MiB。显式audit也等全部B完成后再导出，按快照绑定各次attempt，重复同A不会误导出最后一次结果。单条acquire/probe-cv/render-report兼容原调试报告；不删原视频/CSV/证据，不清全局缓存，不提高守卫，不引入ASR/模型分析或自动重试。
 
 ## 0.5.3详情RPA并行批次
 
@@ -8,7 +16,7 @@
 
 batch.json记录rpaConcurrency=3、mediaConcurrency=1、cvConcurrency=1（旧concurrency=1仍指CV）、rpaSubmissionCount、rpaWaves、acquisitionPhase与逐条rpaWave/rpaStatus/taskId；提交计数只计已确认taskId，未知请求不算确认成功。视频仍原SHA/有界尺寸/严格身份，CSV缓存绑定与哈希复验不放宽。数量1/短缺/最后不足3条按实际条数提交，不滚动补位、不重抓榜单、不自动重试或恢复。
 
-run-batch一次选材、1–10条不同素材、先每批最多3条详情RPA和串行媒体核验、全部A就绪，再串行B，保留全部输入门禁、原生worker和进程清理；A失败不启动任何B；B失败保留全部A和已完成B，未处理B为pending；短缺partial，不自动补位/恢复。acquire只做单条A；probe-cv-batch已有A默认一份HTML，--delivery audit才逐条大ZIP。默认export-html无MP4复制/读取或ZIP，已完成报告快照、CV收据输入SHA、镜头及代表帧核验；完整A输入核验留verify/probe-cv。HTML单帧256KiB、总图片12MiB，超限显示对应缺口、所有镜头区间保留；一帧一帧写入，不全量加载图片。中文素材导航/时间轴/大图/画廊参考现有元技能与脚本工作台。约200ms守卫和缓存建议保留在原目录html-exports，不默认再交付ZIP。默认报告不含视频播放，完整媒体留原目录；历史技术ZIP规则仅适用于显式审计。
+run-batch一次选材、1–10条不同素材、先每批最多3条详情RPA和串行媒体核验、全部A就绪，再串行B，保留全部输入门禁、原生worker和进程清理；A失败不启动任何B；B失败保留全部A和已完成B，未处理B为pending；短缺partial，不自动补位/恢复。acquire只做单条A；probe-cv-batch已有A默认一份HTML，--delivery audit在全部B完成后才生成各次绑定快照的审计ZIP。默认export-html无MP4复制/读取或ZIP，已完成报告快照、CV收据输入SHA、镜头及代表帧核验；完整A输入核验留verify/probe-cv。HTML单帧256KiB、总图片12MiB，超限显示对应缺口、所有镜头区间保留；一帧一帧写入，不全量加载图片。中文素材导航/时间轴/大图/画廊参考现有元技能与脚本工作台。约200ms守卫和缓存建议保留在原目录html-exports，不默认再交付ZIP。默认报告不含视频播放，完整媒体留原目录；历史技术ZIP规则仅适用于显式审计。
 
 # 分镜与内存契约（0.4.1）
 

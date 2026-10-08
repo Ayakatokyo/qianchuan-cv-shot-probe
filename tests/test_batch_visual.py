@@ -220,3 +220,62 @@ class BatchVisualTests(unittest.TestCase):
         self.assertEqual(result['acquiredCount'],3);self.assertEqual(result['completedCount'],0)
         self.assertEqual(result['errorCode'],'synthetic_phase_guard')
         self.assertEqual([e['cvStatus'] for e in result['entries']],['pending']*3)
+
+    def test_batch_creates_no_item_html_and_releases_before_next_worker(self):
+        import cv_probe,json
+        original=cv_probe.probe_cv;previous=None;output=self.parent/'lifecycle'
+        original_release=batch.release_item
+        def after_persist(root,stage,**kwargs):
+            if stage=='batch_item_complete':
+                saved=core.read(output/'batch.json')
+                entry=next(e for e in saved['entries'] if e['runDir']==str(root))
+                self.assertEqual(entry['status'],'succeeded')
+                self.assertEqual(entry['cvStatus'],'succeeded')
+                self.assertEqual(entry['reportSnapshotSha256'],core.digest(Path(entry['reportSnapshot'])/'report/report.json'))
+                self.assertIn('memoryObservation',entry)
+            return original_release(root,stage,**kwargs)
+        def before_next(root,**kwargs):
+            nonlocal previous
+            self.assertTrue(kwargs['_defer_report']);self.assertFalse(list(output.rglob('*.html')))
+            if previous is not None:
+                events=[json.loads(line) for line in (previous/'cache-advice.ndjson').read_text().splitlines()]
+                self.assertTrue(any(e['stage']=='batch_item_complete_cv' for e in events))
+                receipt=core.read(previous/'report/receipt.json')
+                self.assertEqual([a['path'] for a in receipt['artifacts']],['report/report.json'])
+            previous=Path(root);return original(root,**kwargs)
+        with patch.object(cv_probe,'probe_cv',side_effect=before_next),patch.object(batch,'release_item',side_effect=after_persist):
+            result=batch.run_batch(self.request(),output)
+        self.assertEqual(result['status'],'succeeded',result)
+        self.assertEqual(list(output.rglob('*.html')),[output/'index.html'])
+        for entry in result['entries']:
+            snapshot=Path(entry['reportSnapshot']);self.assertEqual(core.digest(snapshot/'report/report.json'),entry['reportSnapshotSha256'])
+    def test_worker_guard_stop_never_attempts_automatic_final_report(self):
+        import cv_probe
+        original=cv_probe.probe_cv;calls=0
+        def guarded(root,**kwargs):
+            nonlocal calls
+            calls+=1
+            result=original(root,**kwargs)
+            if calls==1:return result
+            folder=Path(root)/'cv'/kwargs['attempt_id']
+            receipt=core.read(folder/'receipt.json');receipt.update(status='failed',errorCode='memory_guard_aborted');core.write(folder/'receipt.json',receipt)
+            guard=core.read(folder/'memory-guard.json');guard.update(abort=True,reason='working_set_ceiling');core.write(folder/'memory-guard.json',guard)
+            return result
+        with patch.object(cv_probe,'probe_cv',side_effect=guarded),patch.object(visual,'export_batch_html') as exported:
+            result=batch.run_batch(self.request(),self.parent/'guard-no-export')
+        exported.assert_not_called();self.assertEqual(result['completedCount'],1)
+        self.assertEqual(result['guardStopReason'],'working_set_ceiling');self.assertEqual(result['guardStopOrigin'],'cv_attempt_guard')
+    def test_final_stream_keeps_only_bounded_public_objects(self):
+        import weakref,gc
+        class Public(dict):pass
+        references=[];passes=0;maximum=0
+        def items():
+            nonlocal passes,maximum
+            passes+=1
+            for index in range(10):
+                gc.collect();maximum=max(maximum,sum(ref() is not None for ref in references))
+                public=Public(platform='qianchuan',materialId=str(index),cv={'status':'pending','shots':[]})
+                references.append(weakref.ref(public));yield public,None
+        visual.write_visual(self.parent/'stream.html',items)
+        self.assertEqual(passes,2);self.assertLessEqual(maximum,1)
+        self.assertEqual((self.parent/'stream.html').read_text().count('class="material-panel"'),10)

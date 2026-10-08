@@ -96,3 +96,33 @@ class SerialExportTests(unittest.TestCase):
             observed=memory.release_owned(self.parent,'export_test',self.parent,[target,link,directory/'frame.jpg'])
         self.assertEqual(advise.call_count,2);self.assertEqual(observed['advisedBytes'],11)
         self.assertEqual(target.read_bytes(),b'archive');self.assertEqual(untouched.read_bytes(),b'private')
+
+    def test_audit_exports_start_only_after_every_cv_snapshot_is_ready(self):
+        original=delivery.export_report;output=self.parent/'deferred-audit'
+        def after_all(root,destination,**kwargs):
+            batch=core.read(output/'batch.json');self.assertEqual(batch['completedCount'],batch['requestedCount'])
+            self.assertTrue(all(e.get('reportSnapshotSha256') for e in batch['entries']))
+            self.assertIsInstance(kwargs['_report_snapshot'],dict)
+            return original(root,destination,**kwargs)
+        with patch.object(delivery,'export_report',side_effect=after_all):result=serial_probe.probe_batch(self.manifest(),output,delivery_mode='audit')
+        self.assertEqual(result['status'],'succeeded',result)
+        attempts=[]
+        for entry in result['entries']:
+            public=core.read(Path(entry['export']['bundleDir'])/'report/report.json');attempts.append(public['cv']['attemptId'])
+        self.assertEqual(attempts,[e['attemptId'] for e in result['entries']])
+    def test_partial_snapshot_does_not_reuse_previous_success_for_pending_same_A(self):
+        import cv_probe,visual_report
+        cv_probe.probe_cv(self.root,attempt_id='old-success')
+        entry={'cvStatus':'pending','status':'pending'}
+        saved=visual_report.snapshot_report(self.root,self.parent/'pending-snapshot',entry=entry)
+        public=core.read(Path(saved['reportSnapshot'])/'report/report.json')
+        self.assertEqual(public['status'],'pending');self.assertEqual(public['cvStatus'],'pending')
+        self.assertEqual(public['cv']['shots'],[]);self.assertIsNone(public['cv']['attemptId'])
+    def test_snapshot_sha_binds_batch_export_against_rewritten_snapshot_receipt(self):
+        import cv_probe,visual_report
+        cv_probe.probe_cv(self.root,attempt_id='snapshot-sha')
+        entry=visual_report.snapshot_report(self.root,self.parent/'snapshot',expected_attempt='snapshot-sha')
+        folder=Path(entry['reportSnapshot']);public=core.read(folder/'report/report.json');public['materialName']='tampered'
+        core.write(folder/'report/report.json',public);core.write(folder/'report/receipt.json',{'artifacts':[core.artifact(folder/'report/report.json',folder)]})
+        with self.assertRaises(core.ProbeError):delivery.export_report(self.root,self.parent/'changed-snapshot',expected_attempt='snapshot-sha',_report_snapshot=entry)
+        self.assertFalse((self.parent/'changed-snapshot.zip').exists())

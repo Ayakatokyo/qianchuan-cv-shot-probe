@@ -10,7 +10,7 @@ import sys
 import time
 import uuid
 
-from runtime_memory import policy, release_completed, append_event
+from runtime_memory import policy, release_completed, append_event, digest_owned
 from memory_guard import evaluate_guard, process_tree_rss
 from probe_core import ROOT,ProbeError,Resources,artifact,cgroup_snapshot,digest,fingerprint,read,write,run_lock,safe_file,verify,probe_media,resource_summary,safe_error
 
@@ -144,7 +144,7 @@ def cv_status(root):
             'memoryObservation':resource_summary(attempt),'cgroupCounterDelta':receipt.get('cgroupCounterDelta'),'processCleanup':receipt.get('processCleanup'),'terminationDiagnosis':receipt.get('terminationDiagnosis'),'oomAttribution':'Counters belong to the visible shared cgroup; delta alone does not identify this worker.',
             'dependencies':read(attempt/'worker-environment.json') if (attempt/'worker-environment.json').exists() else None,'shots':data.get('shots',[])}
 
-def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
+def probe_cv(root,*,attempt_id=None,config_file=None,backend=None,_defer_report=False):
     root=Path(root);config=config_value(config_file)
     if backend:config['backend']=backend
     if config['backend'] not in ('ffmpeg-scene','adaptive'):raise ProbeError('cv_config_invalid')
@@ -166,7 +166,8 @@ def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
                 if prior_receipt.get('status')=='succeeded' and prior_receipt.get('bindingSha256')==signature:
                     verify_cv(root,prior_id)
                     from probe_core import report
-                    result=report(root);result['reusedCvAttempt']=True;return result
+                    result={'status':'succeeded','cvStatus':'succeeded','cvAttemptId':prior_id} if _defer_report else report(root)
+                    result['reusedCvAttempt']=True;return result
         attempt_id=attempt_id or ('cv-'+uuid.uuid4().hex[:12]);attempt=root/'cv'/attempt_id
         if attempt.exists():raise ProbeError('cv_attempt_exists')
         attempt.mkdir(parents=True)
@@ -205,7 +206,7 @@ def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
                 if process.returncode!=0 or worker_state.get('workerResult')!='succeeded':
                     code=worker_state.get('errorCode') or ('signal_terminated_unknown' if process.returncode<0 else 'cv_worker_failed')
                     raise ProbeError(code)
-                if digest(video)!=video_sha:raise ProbeError('cv_input_changed')
+                if digest_owned(video,owner_root=root,log_root=root,stage='cv_input_post_hash')!=video_sha:raise ProbeError('cv_input_changed')
             except Exception as exc:error=getattr(exc,'code','cv_supervisor_failed');write(attempt/'supervisor-failure.json',{'errorCode':error,'exceptionType':type(exc).__name__,'message':safe_error(exc)})
             finally:
                 if process is not None:
@@ -227,5 +228,6 @@ def probe_cv(root,*,attempt_id=None,config_file=None,backend=None):
                 error=getattr(exc,'code','cv_verification_failed');receipt.update(status='failed',errorCode=error);write(attempt/'receipt.json',receipt)
                 state=read(attempt/'status.json');state.update(status='failed',errorCode=error);write(attempt/'status.json',state)
         from probe_core import report
-        result=report(root);result['cvAttemptId']=attempt_id
+        result={'status':receipt['status'],'cvStatus':receipt['status']} if _defer_report else report(root)
+        result['cvAttemptId']=attempt_id
         return result

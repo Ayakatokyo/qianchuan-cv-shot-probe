@@ -108,7 +108,7 @@ def run(job):
     if binary.returncode:raise ProbeError('ffmpeg_unavailable')
     if 'Detect video scene change' not in supported.stdout+supported.stderr:raise ProbeError('ffmpeg_scdet_unavailable')
     write(root/'worker-environment.json',{'backend':'ffmpeg-scene','dependencies':{'imageio-ffmpeg':version('imageio-ffmpeg')},'ffmpegVersion':binary.stdout.splitlines()[0],'ffmpegSha256':digest(ffmpeg),'pixelArraysInPython':False,'heavyCvImports':False,'ffmpegThreads':1})
-    if digest(video)!=job['videoSha256']:raise ProbeError('artifact_changed')
+    if __import__('runtime_memory').digest_owned(video,owner_root=video.parent,log_root=root,stage='worker_input_hash')!=job['videoSha256']:raise ProbeError('artifact_changed')
     state(root,'cv_decode_detect');decoded=decode(video,root,config,ffmpeg,job['media']);shots=shots_from_timeline(root,decoded)
     data={**{k:v for k,v in decoded.items() if k!='cuts'},'detector':'FFmpeg scdet','backend':'ffmpeg-scene','detectionStatus':'succeeded','representativeStatus':'pending','shots':shots};write(root/'shots.json',data)
     state(root,'cv_representative_frames',shotCount=len(shots));frames=root/'frames';frames.mkdir()
