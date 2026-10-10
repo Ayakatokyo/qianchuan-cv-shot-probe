@@ -1,4 +1,25 @@
-# 千川 CV 分镜工作台 0.5.5
+# 千川 CV 分镜工作台 0.5.6
+
+## 0.5.6运行产物路径（2026-10-08）
+
+延续元技能的“用户工作对象目录与技能安装目录分离”，并采用脚本工作台的“业务数据根目录 + 唯一运行子目录”模式。执行前保持当前目录为用户工作对象目录，保存 `WORKSPACE_ROOT="$PWD"`，通过技能安装目录的绝对路径调用脚本；不得把技能安装目录当作工作对象目录。
+
+`run-batch`、`probe-cv-batch`、单条 `acquire` 默认写入 `$WORKSPACE_ROOT/千川素材分镜数据/run-<UTC时间>-<8位随机标识>/`。`--output-root` 指定数据根目录，仍自动追加唯一 run 子目录；`--output-dir` 精确指定本次运行目录，不追加子目录，两项互斥。目录解析为绝对路径，拒绝技能安装目录及解析后指向它的软链接，拒绝复用已存在的新运行目录。返回的 `runDir` 为实际运行目录；批次还将其保存在 `batch.json`，最终报告以 `report.htmlPath` 为准。
+
+批量最终报告在 `<runDir>/index.html`，选材记录在 `selection/`，新取数各条A/B输入与证据在 `runs/item-N/`，报告绑定快照在 `snapshots/`。复用已有A的批次仍从清单指定的原目录读取输入，并在那里保存本次CV attempt，新批次目录保存状态、快照和最终HTML。单条调试报告在 `<runDir>/report/index.html`。`export-html` 仍须显式 `--output-file`，建议导出到本次运行的 `exports/`；审计 `export-report` 仍须显式 `--output-dir`。`resume` 必须显式指定原 `--output-dir`，不自动另建目录。历史运行不移动、不改写；本次只调整路径，沿用现有A/B门禁、最终一HTML与低内存策略。
+
+默认目录示意：
+
+```text
+用户工作对象目录/
+  千川素材分镜数据/
+    run-YYYYMMDD-HHMMSS-xxxxxxxx/
+      index.html              # 批量最终阅读入口
+      batch.json              # 状态、绝对runDir与逐条结果
+      selection/              # 新取数选材记录
+      runs/item-N/            # 新取数逐条A/B证据
+      snapshots/item-N/       # 绑定本次结果的报告快照
+```
 
 ## 0.5.5高缓存基线准入
 
@@ -22,7 +43,7 @@ cgroup v1 的原生 inactive_file 不含 swap-backed shmem；该 LRU 上的 Lazy
 
 batch.json记录rpaConcurrency=3、mediaConcurrency=1、cvConcurrency=1（旧concurrency=1仍指CV）、rpaSubmissionCount、rpaWaves、acquisitionPhase与逐条rpaWave/rpaStatus/taskId；提交计数只计已确认taskId，未知请求不算确认成功。视频仍原SHA/有界尺寸/严格身份，CSV缓存绑定与哈希复验不放宽。数量1/短缺/最后不足3条按实际条数提交，不滚动补位、不重抓榜单、不自动重试或恢复。
 
-独立源码：qianchuan-cv-shot-probe。0.5.5支持一次提问处理1–10条不同素材，一次榜单选材后先每批最多3条提交详情RPA并收齐CSV，串行完成视频下载/核验，再逐个执行CV并确认进程清理，默认一份可离线HTML。元技能/脚本工作台仅作设计参照，不运行时导入其代码，不改变这四个仓或插件。
+独立源码：qianchuan-cv-shot-probe。0.5.6支持一次提问处理1–10条不同素材，一次榜单选材后先每批最多3条提交详情RPA并收齐CSV，串行完成视频下载/核验，再逐个执行CV并确认进程清理，默认一份可离线HTML。元技能/脚本工作台仅作设计参照，不运行时导入其代码，不改变这四个仓或插件。
 
 入口见[SKILL.md](SKILL.md)。新取数run-batch、已有A串行probe-cv-batch、已有B轻量交付export-html；完整export-report ZIP仍是显式审计选项。现有详情素材数就是CV批量数量（不新增字段）；表单/pre_input数量范围、授权ID说明、默认交付同步。素材不足如实partial，失败停队列，pending保留，不自动恢复或补位。
 

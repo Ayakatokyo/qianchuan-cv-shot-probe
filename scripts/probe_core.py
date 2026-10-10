@@ -26,6 +26,7 @@ from connector_contract import validate_business_params
 ROOT = Path(__file__).resolve().parents[1]
 CSV_LIMIT = 32 * 1024 * 1024
 VIDEO_LIMIT = 128 * 1024 * 1024
+DEFAULT_OUTPUT_FOLDER = '千川素材分镜数据'
 
 def safe_error(exc):
     message=str(exc)
@@ -81,6 +82,25 @@ def external_root(value):
     path = Path(value).expanduser().resolve()
     if path==ROOT or path.is_relative_to(ROOT): raise ProbeError('output_inside_skill')
     return path
+
+def new_run_root(output_root=None, output_dir=None):
+    """Choose a fresh run under the caller's workspace, without creating files."""
+    if output_root is not None and output_dir is not None:
+        raise ProbeError('output_path_conflict')
+    if output_dir is not None:
+        path = external_root(output_dir)
+    else:
+        root = external_root(output_root if output_root is not None else Path.cwd()/DEFAULT_OUTPUT_FOLDER)
+        run_id = 'run-'+datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8]
+        path = external_root(root/run_id)
+    if path.exists():
+        raise ProbeError('output_dir_exists', 'Use a new run directory; existing runs are preserved.')
+    return path
+
+def add_new_run_output(parser):
+    destination = parser.add_mutually_exclusive_group()
+    destination.add_argument('--output-root', type=Path, help='运行根目录；默认当前工作目录/'+DEFAULT_OUTPUT_FOLDER+'，自动创建唯一run子目录')
+    destination.add_argument('--output-dir', type=Path, help='精确指定本次新运行目录，不追加run子目录')
 
 @contextmanager
 def run_lock(root):
@@ -654,19 +674,23 @@ def main(argv=None):
     commands=parser.add_subparsers(dest='command',required=True)
     p=commands.add_parser('preflight');p.add_argument('--cv',action='store_true');p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'],default='ffmpeg-scene')
     p=commands.add_parser('probe-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--profile',choices=['low-memory'],default='low-memory');p.add_argument('--attempt-id');p.add_argument('--config-file',type=Path);p.add_argument('--backend',choices=['ffmpeg-scene','adaptive'])
-    p=commands.add_parser('run-batch');p.add_argument('--request-file',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
+    p=commands.add_parser('run-batch');p.add_argument('--request-file',type=Path,required=True);add_new_run_output(p)
     p=commands.add_parser('export-html');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--output-file',type=Path,required=True)
-    p=commands.add_parser('probe-cv-batch');p.add_argument('--manifest-file',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True);p.add_argument('--delivery',choices=['html','audit'],default='html')
+    p=commands.add_parser('probe-cv-batch');p.add_argument('--manifest-file',type=Path,required=True);add_new_run_output(p);p.add_argument('--delivery',choices=['html','audit'],default='html')
     p=commands.add_parser('verify-cv');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--attempt-id')
     p=commands.add_parser('export-report');p.add_argument('--run-dir',type=Path,required=True);p.add_argument('--output-dir',type=Path,required=True)
     p=commands.add_parser('verify-export');p.add_argument('--bundle-dir',type=Path,required=True)
     for name in ('validate','acquire','resume'):
         p=commands.add_parser(name);p.add_argument('--request-file',type=Path,required=True)
-        if name!='validate':p.add_argument('--output-dir',type=Path,required=True)
+        if name=='acquire':add_new_run_output(p)
+        elif name=='resume':p.add_argument('--output-dir',type=Path,required=True)
     for name in ('status','verify','render-report'):
         p=commands.add_parser(name);p.add_argument('--run-dir',type=Path,required=True)
     args=parser.parse_args(argv)
+    run_dir=None
     try:
+        if args.command in ('run-batch','probe-cv-batch','acquire'):
+            run_dir=new_run_root(args.output_root,args.output_dir)
         if args.command=='preflight':
             result=preflight()
             if args.cv:
@@ -679,13 +703,13 @@ def main(argv=None):
             result=probe_cv(external_root(args.run_dir),attempt_id=args.attempt_id,config_file=args.config_file,backend=args.backend)
         elif args.command=='run-batch':
             from batch_acquisition import run_batch
-            result=run_batch(read(args.request_file),args.output_dir)
+            result=run_batch(read(args.request_file),run_dir)
         elif args.command=='export-html':
             from visual_report import export_html
             result=export_html(external_root(args.run_dir),external_root(args.output_file))
         elif args.command=='probe-cv-batch':
             from serial_probe import probe_batch
-            result=probe_batch(args.manifest_file,args.output_dir,delivery_mode=args.delivery)
+            result=probe_batch(args.manifest_file,run_dir,delivery_mode=args.delivery)
         elif args.command=='verify-cv':
             from cv_probe import verify_cv
             receipt=verify_cv(external_root(args.run_dir),args.attempt_id);result={'status':'verified','cvStatus':receipt['status']}
@@ -698,7 +722,7 @@ def main(argv=None):
         elif args.command=='validate':
             __import__('platform_adapter').validate(read(args.request_file));result={'status':'valid','stage':'A'}
         elif args.command in ('acquire','resume'):
-            result=acquire(read(args.request_file),args.output_dir,resume=args.command=='resume')
+            result=acquire(read(args.request_file),run_dir if args.command=='acquire' else args.output_dir,resume=args.command=='resume')
         else:
             root=external_root(args.run_dir)
             if args.command=='status':
@@ -709,6 +733,9 @@ def main(argv=None):
             elif args.command=='verify':
                 receipt=verify(root);result={'status':'verified','materialId':receipt['materialId'],'stage':'A_acquisition'}
             else:result=report(root)
+        if run_dir is not None:result['runDir']=str(run_dir)
         print(json.dumps(result,ensure_ascii=False));return 1 if result.get('status') in ('failed','interrupted') else 0
     except Exception as exc:
-        print(json.dumps({'status':'failed','errorCode':getattr(exc,'code','input_or_contract_error'),'message':safe_error(exc)},ensure_ascii=False));return 1
+        error={'status':'failed','errorCode':getattr(exc,'code','input_or_contract_error'),'message':safe_error(exc)}
+        if run_dir is not None:error['runDir']=str(run_dir)
+        print(json.dumps(error,ensure_ascii=False));return 1

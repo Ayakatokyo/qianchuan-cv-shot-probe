@@ -92,7 +92,7 @@ def run_batch(request, output, *, gateway_factory=Gateway):
     selection_root=output/'selection';selection_root.mkdir()
     write(selection_root/'request.json',normalized)
     result={'schemaVersion':1,'packageVersion':read(ROOT/'config/platform.json')['version'],
-            'platform':read(ROOT/'config/platform.json')['platform'],'batchId':'batch-'+uuid.uuid4().hex[:12],
+            'platform':read(ROOT/'config/platform.json')['platform'],'batchId':'batch-'+uuid.uuid4().hex[:12],'runDir':str(output),
             'status':'running','stage':'selection','concurrency':1,'rpaConcurrency':RPA_CONCURRENCY,'mediaConcurrency':1,'cvConcurrency':1,'requestedCount':count,'selectedCount':0,'acquiredCount':0,'completedCount':0,
             'acquisition':'one_selection_rpa_waves_then_serial_B','entries':[]}
     write(output/'batch.json',result)

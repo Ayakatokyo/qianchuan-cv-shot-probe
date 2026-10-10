@@ -29,7 +29,7 @@ def probe_batch(manifest_file, output, *, delivery_mode='html'):
     batch_id='serial-'+uuid.uuid4().hex[:12]
     entries=[{'index':i,'runDir':str(root),'attemptId':batch_id+'-'+str(i),'status':'pending'} for i,root in enumerate(roots,1)]
     result={'schemaVersion':1,'packageVersion':read(ROOT/'config/platform.json')['version'],
-            'platform':read(ROOT/'config/platform.json')['platform'],'batchId':batch_id,'status':'running',
+            'platform':read(ROOT/'config/platform.json')['platform'],'batchId':batch_id,'runDir':str(output),'status':'running',
             'manifestSha256':digest(manifest_file),'concurrency':1,'acquisition':'reused_A_only',
             'entries':entries,'completedCount':0,'requestedCount':len(entries)}
     write(output/'batch.json',result)

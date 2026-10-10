@@ -1,5 +1,9 @@
 # 0.5.5当前输入与交付契约
 
+## 0.5.6产物目录契约（2026-10-08）
+
+新运行CLI（run-batch/probe-cv-batch/acquire）默认使用调用方当前工作对象目录下的 `千川素材分镜数据/run-<UTC时间>-<8位随机标识>/`。`--output-root` 为自动分运行的数据根目录，`--output-dir` 为精确新目录，两者互斥；拒绝技能目录/软链接与已存在的新运行目录。返回绝对 `runDir`，批次写入batch.json，最终HTML以report.htmlPath为准（批量index.html、单条report/index.html）。resume继续显式指定原目录；已有A仍由清单指定输入并保存新CV attempt，export-html/export-report继续显式指定交付路径。旧产物不移动，算法、身份/SHA、守卫、并发和HTML样式保持。本仓独立实现，不运行时导入其他技能。完整用法见SKILL.md的0.5.6节。
+
 ## 0.5.5阶段内存准入
 
 当前内存政策见cv-contract.md的0.5.5节。v1缺shmem不虚构0，缺dirty/writeback仅用可信原生proc两次全局观测保守扣除；失败回退raw。95%从v1无条件停改缓存压力复核，80%工作集/256MiB树/各阶段reserve数值保持。阶段余量取95%余量与80%工作集余量较小值且树剩余预算覆盖reserve，轻RPA32MiB与选择/CV128MiB分别判定；actual used>=limit、当前OOM、新事件、不可靠高raw仍拒绝。phase-memory保留原raw余量、headroomForStageBytes/headroomBasis、cacheBackedAdmission、来源/两行proc原文/时间/missing，未知不填0；两点观测和200ms采样不是整个区间或瞬时OOM保证。

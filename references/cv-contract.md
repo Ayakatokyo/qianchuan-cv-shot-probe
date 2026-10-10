@@ -1,5 +1,9 @@
 # 0.5.5当前批量与轻量报告
 
+## 0.5.6产物目录契约（2026-10-08）
+
+新运行CLI（run-batch/probe-cv-batch/acquire）默认使用调用方当前工作对象目录下的 `千川素材分镜数据/run-<UTC时间>-<8位随机标识>/`。`--output-root` 为自动分运行的数据根目录，`--output-dir` 为精确新目录，两者互斥；拒绝技能目录/软链接与已存在的新运行目录。返回绝对 `runDir`，批次写入batch.json，最终HTML以report.htmlPath为准（批量index.html、单条report/index.html）。resume继续显式指定原目录；已有A仍由清单指定输入并保存新CV attempt，export-html/export-report继续显式指定交付路径。旧产物不移动，算法、身份/SHA、守卫、并发和HTML样式保持。本仓独立实现，不运行时导入其他技能。完整用法见SKILL.md的0.5.6节。
+
 ## 0.5.5原生v1缓存与阶段准入
 
 本节是当前内存政策；下文0.3.x/0.4.x为历史实现说明，其中全部shmem/dirty/writeback必需、raw95无条件停和B128MiB基于raw余量的规则已由本节修正。

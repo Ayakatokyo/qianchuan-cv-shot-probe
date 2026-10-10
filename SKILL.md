@@ -5,9 +5,17 @@ metadata:
   argument_hint: 选择授权账号、日期、素材数量和筛选条件，一次提问完成分镜。
 ---
 
-# 千川视频CV分镜工作台（0.5.5）
+# 千川视频CV分镜工作台（0.5.6）
 
 默认先全部A、再串行B：一次查询素材榜单，按筛选排序选择1–10条不同素材，先每批最多3条提交详情RPA，收齐本批CSV并核对身份/周期，再串行下载视频；所有选中素材的A输入就绪后，再按原顺序逐个执行低内存CV分镜并确认进程清理。只交付一份可视化HTML。音频转写、脚本时间码对齐和宿主AI二次分析后置。
+
+## 0.5.6运行产物路径（2026-10-08）
+
+延续元技能的“用户工作对象目录与技能安装目录分离”，并采用脚本工作台的“业务数据根目录 + 唯一运行子目录”模式。执行前保持当前目录为用户工作对象目录，保存 `WORKSPACE_ROOT="$PWD"`，通过技能安装目录的绝对路径调用脚本；不得把技能安装目录当作工作对象目录。
+
+`run-batch`、`probe-cv-batch`、单条 `acquire` 默认写入 `$WORKSPACE_ROOT/千川素材分镜数据/run-<UTC时间>-<8位随机标识>/`。`--output-root` 指定数据根目录，仍自动追加唯一 run 子目录；`--output-dir` 精确指定本次运行目录，不追加子目录，两项互斥。目录解析为绝对路径，拒绝技能安装目录及解析后指向它的软链接，拒绝复用已存在的新运行目录。返回的 `runDir` 为实际运行目录；批次还将其保存在 `batch.json`，最终报告以 `report.htmlPath` 为准。
+
+批量最终报告在 `<runDir>/index.html`，选材记录在 `selection/`，新取数各条A/B输入与证据在 `runs/item-N/`，报告绑定快照在 `snapshots/`。复用已有A的批次仍从清单指定的原目录读取输入，并在那里保存本次CV attempt，新批次目录保存状态、快照和最终HTML。单条调试报告在 `<runDir>/report/index.html`。`export-html` 仍须显式 `--output-file`，建议导出到本次运行的 `exports/`；审计 `export-report` 仍须显式 `--output-dir`。`resume` 必须显式指定原 `--output-dir`，不自动另建目录。历史运行不移动、不改写；本次只调整路径，沿用现有A/B门禁、最终一HTML与低内存策略。
 
 ## 0.5.5高缓存基线准入
 
@@ -42,10 +50,21 @@ batch.json记录rpaConcurrency=3、mediaConcurrency=1、cvConcurrency=1（旧con
 ```bash
 python "$SKILL_ROOT/scripts/run.py" preflight --cv
 python "$SKILL_ROOT/scripts/run.py" validate --request-file "$WORKSPACE_ROOT/request.json"
-python "$SKILL_ROOT/scripts/run.py" run-batch --request-file "$WORKSPACE_ROOT/request.json" --output-dir "$WORKSPACE_ROOT/千川分镜-唯一标识"
+python "$SKILL_ROOT/scripts/run.py" run-batch --request-file "$WORKSPACE_ROOT/request.json"
 ```
 
 run-batch包含选材、A、B和轻量交付；数量1也用此入口。榜单仅一次，不能循环调用相同TOP1凑数量。每条详情CSV必须通过身份/周期校验，视频媒体辅助身份匹配后才记A就绪；全部A成功后才进入B，取数/下载和CV不会交替；B原生ffmpeg-scene、独立受监督worker、并发1，每条清理完成才下一条。同一沙箱两个平台也不得同时启动队列。用户已要求处理指定条数即可执行，不在每条之间重复询问确认。
+
+默认路径与自定义路径示例（每次新取数只选择其中一种执行）：
+
+```bash
+# 使用当前工作对象目录下的默认数据根目录
+python "$SKILL_ROOT/scripts/run.py" run-batch --request-file "$WORKSPACE_ROOT/request.json"
+# 指定数据根目录，自动追加新的 run 子目录
+python "$SKILL_ROOT/scripts/run.py" run-batch --request-file "$WORKSPACE_ROOT/request.json" --output-root "$WORKSPACE_ROOT/千川素材分镜数据"
+# 兼容原用法，精确指定一个尚不存在的运行目录
+python "$SKILL_ROOT/scripts/run.py" run-batch --request-file "$WORKSPACE_ROOT/request.json" --output-dir "$WORKSPACE_ROOT/千川素材分镜数据/自定义唯一标识"
+```
 
 ## 输出与失败
 
@@ -56,7 +75,7 @@ batch.json保存stage（selection/acquisition/cv/delivery/complete）、requeste
 单条acquire保留为调试A入口且只接受数量1；批量输入会报use_run_batch，防止静默只取首条。resume仅用户明确恢复时复用原任务/请求/源哈希/绑定选择；队列无自动续跑CLI，不能换目录重取全部以绕过失败。导出失败但B已完成时优先以下轻量导出，不重跑B：
 
 ```bash
-python "$SKILL_ROOT/scripts/run.py" export-html --run-dir "$RUN_ROOT" --output-file "$WORKSPACE_ROOT/交付/千川分镜-唯一标识.html"
+python "$SKILL_ROOT/scripts/run.py" export-html --run-dir "$RUN_ROOT" --output-file "$RUN_ROOT/exports/千川分镜-唯一标识.html"
 ```
 
 export-html核对已生成报告快照、CV收据与镜头/代表帧SHA，不重新读取CSV/MP4或取数；旧报告快照若缺失或已改变须先inspect/render-report，不能伪造收据。运行目录html-exports保留约200ms采样、守卫和导出收据，默认不另给证据ZIP。高基线导致连轻量导出也被拦截时交付已保存诊断并停止。
@@ -70,7 +89,7 @@ export-html核对已生成报告快照、CV收据与镜头/代表帧SHA，不重
 ```
 
 ```bash
-python "$SKILL_ROOT/scripts/run.py" probe-cv-batch --manifest-file "$WORKSPACE_ROOT/已有输入.json" --output-dir "$WORKSPACE_ROOT/串行分镜-唯一标识"
+python "$SKILL_ROOT/scripts/run.py" probe-cv-batch --manifest-file "$WORKSPACE_ROOT/已有输入.json"
 ```
 
 默认最终只交付一份HTML。仅用户明确要求完整视频/内存审计证据时，probe-cv-batch可加--delivery audit，或调用export-report --run-dir --output-dir及verify-export --bundle-dir；审计ZIP包含MP4、A/B日志、全部帧、独立导出内存证据ZIP，可能再次触及缓存保护线，不能为了交付提高阈值。

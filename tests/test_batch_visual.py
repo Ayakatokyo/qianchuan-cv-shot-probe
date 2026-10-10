@@ -26,6 +26,22 @@ class BatchVisualTests(unittest.TestCase):
     def request(self,count=3):
         request=intake.request();request['query_spec']['collection']={'targetTopN':count} if intake.PLATFORM=='qianchuan' else {'target_top_n':count}
         return request
+    def test_cli_default_workspace_path_produces_one_complete_batch_html(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        request_file=self.parent/'cli-request.json';core.write(request_file,self.request())
+        stdout=StringIO()
+        with patch.object(Path,'cwd',return_value=self.parent),redirect_stdout(stdout):
+            code=core.main(['run-batch','--request-file',str(request_file)])
+        result=json.loads(stdout.getvalue());self.assertEqual(code,0,result)
+        root=Path(result['runDir'])
+        self.assertEqual(root.parent,(self.parent/core.DEFAULT_OUTPUT_FOLDER).resolve())
+        self.assertEqual(core.read(root/'batch.json')['runDir'],str(root))
+        self.assertEqual(result['completedCount'],3)
+        self.assertEqual(Path(result['report']['htmlPath']),root/'index.html')
+        self.assertEqual(list(root.rglob('*.html')),[root/'index.html'])
+        self.assertIn('data:image/jpeg;base64,',(root/'index.html').read_text())
+        self.assertTrue(all(Path(entry['runDir']).is_relative_to(root/'runs') for entry in result['entries']))
     def test_all_three_acquisitions_finish_before_serial_cv_and_one_html(self):
         import cv_probe
         output=self.parent/'batch';original=cv_probe.probe_cv;order=[]
